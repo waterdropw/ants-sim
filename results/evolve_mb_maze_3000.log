@@ -1,0 +1,10 @@
+EVOLVE env=maze pop=8 gens=6 eval_ticks=3000 colony=200
+  gen 0  best=60.50 mean=7.56 worst=0.00 div=0.1752
+  gen 1  best=66.60 mean=15.89 worst=0.00 div=0.2057
+  gen 2  best=66.60 mean=25.56 worst=0.00 div=0.2178
+  gen 3  best=66.60 mean=32.20 worst=0.00 div=0.1999
+  gen 4  best=104.60 mean=41.60 worst=0.00 div=0.2158
+  gen 5  best=104.60 mean=34.56 worst=0.00 div=0.2105
+  diversity genotypic init=0.1752 final=0.2105 | behavioral init=0.1626 final=0.2796 | open-ended(non-collapse)=true
+BEST score=104.60 collected=58.5 mean_def_frac=0.000 fs=3.647 explore=0.198 aggression=0.405
+  saved: results/evolved_mb_maze_3000.toml + results/evolved_mb_maze_3000_history.csv

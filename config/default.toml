@@ -1,0 +1,36 @@
+[genome]
+max_speed = 1.2000000476837158
+turn_rate = 0.6000000238418579
+food_radius = 3.0
+nest_radius = 4.0
+antenna_angle = 0.5
+antenna_dist = 4.0
+trail_threshold = 0.009999999776482582
+alarm_threshold = 0.05000000074505806
+explore_rate = 0.11999999731779099
+follow_strength = 3.0
+aggression = 0.5
+carry_threshold = 0.5
+task_switch_threshold = 0.30000001192092896
+trail_release_rate = 0.15000000596046448
+trail_decay = 0.014999999664723873
+alarm_release_rate = 1.0
+alarm_decay = 0.02500000037252903
+home_release_rate = 0.15000000596046448
+exploration_baseline = 0.5
+aggression_baseline = 0.5
+task_bias = 0.0
+trail_reinforcement = 0.20000000298023224
+
+[world]
+width = 256
+height = 256
+nest_x = 128.0
+nest_y = 128.0
+nest_radius = 6.0
+
+[sim]
+seed = 42
+colony_size = 40
+ticks_per_frame = 1
+

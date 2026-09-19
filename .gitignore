@@ -1,0 +1,7 @@
+/target/
+/results/*.csv
+/results/*.html
+/results/*.toml
+.claude/
+*.swp
+.DS_Store

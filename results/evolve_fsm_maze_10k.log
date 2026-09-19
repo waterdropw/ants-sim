@@ -1,0 +1,47 @@
+warning: `/Users/hugo/.cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+   Compiling ants-sim v0.1.0 (/Users/hugo/repos/ants-sim)
+warning: unused variable: `world`
+   --> src/ant/brain.rs:306:47
+    |
+306 | pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `world`
+   --> src/ant/brain.rs:434:47
+    |
+434 | pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+
+warning: variable does not need to be mutable
+   --> src/evolution.rs:459:9
+    |
+459 |     let mut novelty_series: Vec<f64> = Vec::new();
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seasonal`
+   --> src/evolution.rs:450:5
+    |
+450 |     seasonal: bool,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_seasonal`
+
+warning: `ants-sim` (bin "ants-sim") generated 4 warnings (run `cargo fix --bin "ants-sim" -p ants-sim` to apply 4 suggestions)
+    Finished `release` profile [optimized] target(s) in 13.52s
+     Running `target/release/ants-sim --headless --evolve --brain fsm --env maze --gens 6 --pop 10 --ticks 10000 --n-seeds 2 --out-stem evolved_fsm_maze_10k`
+EVOLVE env=maze pop=10 gens=6 eval_ticks=10000 colony=200
+  gen 0  best=97.50 mean=49.90 worst=23.50 div=0.1763
+  gen 1  best=103.50 mean=58.05 worst=16.50 div=0.2268
+  gen 2  best=291.50 mean=120.40 worst=13.00 div=0.2513
+  gen 3  best=425.50 mean=183.40 worst=71.00 div=0.2784
+  gen 4  best=606.70 mean=316.11 worst=109.00 div=0.2713
+  gen 5  best=1536.00 mean=558.07 worst=53.50 div=0.2882
+  diversity genotypic init=0.1763 final=0.2882 | behavioral init=0.0286 final=0.0974 | open-ended(non-collapse)=true
+BEST score=1536.00 collected=1489.5 mean_def_frac=0.000 fs=3.062 explore=0.159 aggression=0.976
+  saved: results/evolved_fsm_maze_10k.toml + results/evolved_fsm_maze_10k_history.csv

@@ -1,0 +1,12 @@
+EVOLVE env=predator pop=10 gens=8 eval_ticks=600 colony=200
+  gen 0  best=142.67 mean=47.72 worst=30.67 div=0.1793
+  gen 1  best=142.67 mean=53.16 worst=30.40 div=0.2123
+  gen 2  best=142.67 mean=56.99 worst=30.93 div=0.2163
+  gen 3  best=142.67 mean=55.23 worst=39.00 div=0.2372
+  gen 4  best=142.67 mean=54.51 worst=28.80 div=0.2296
+  gen 5  best=142.67 mean=60.15 worst=32.80 div=0.2405
+  gen 6  best=142.67 mean=58.77 worst=17.53 div=0.2358
+  gen 7  best=142.67 mean=57.14 worst=35.73 div=0.2501
+  diversity init=0.1793 final=0.2501 open-ended(non-collapse)=true
+BEST score=142.67 collected=102.7 mean_def_frac=0.000 fs=3.000 explore=0.120 aggression=0.500
+  saved: results/evolved_predator.toml + results/evolved_predator_history.csv

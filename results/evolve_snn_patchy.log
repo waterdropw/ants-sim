@@ -1,0 +1,12 @@
+EVOLVE env=patchy pop=10 gens=8 eval_ticks=600 colony=200
+  gen 0  best=139.33 mean=50.01 worst=35.47 div=0.1793
+  gen 1  best=139.33 mean=49.17 worst=27.73 div=0.2110
+  gen 2  best=139.33 mean=56.71 worst=36.27 div=0.2119
+  gen 3  best=139.33 mean=53.33 worst=38.40 div=0.2320
+  gen 4  best=139.33 mean=51.24 worst=30.53 div=0.2197
+  gen 5  best=139.33 mean=56.72 worst=38.80 div=0.2264
+  gen 6  best=139.33 mean=51.70 worst=20.60 div=0.2349
+  gen 7  best=139.33 mean=52.89 worst=37.73 div=0.2507
+  diversity init=0.1793 final=0.2507 open-ended(non-collapse)=true
+BEST score=139.33 collected=99.3 mean_def_frac=0.000 fs=3.000 explore=0.120 aggression=0.500
+  saved: results/evolved_patchy.toml + results/evolved_patchy_history.csv

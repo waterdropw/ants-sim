@@ -1,0 +1,10 @@
+EVOLVE env=scarce_far pop=10 gens=6 eval_ticks=3000 colony=200
+  gen 0  best=166.00 mean=73.82 worst=33.80 div=0.1763
+  gen 1  best=166.00 mean=77.43 worst=18.20 div=0.2192
+  gen 2  best=344.80 mean=161.77 worst=46.60 div=0.2430
+  gen 3  best=367.44 mean=241.97 worst=47.20 div=0.2513
+  gen 4  best=596.32 mean=302.68 worst=62.80 div=0.2605
+  gen 5  best=713.40 mean=411.04 worst=62.60 div=0.2674
+  diversity genotypic init=0.1763 final=0.2674 | behavioral init=0.0811 final=0.1329 | open-ended(non-collapse)=true
+BEST score=713.40 collected=673.6 mean_def_frac=0.000 fs=2.762 explore=0.186 aggression=0.860
+  saved: results/evolved_fsm_scarce_far_3k_A.toml + results/evolved_fsm_scarce_far_3k_A_history.csv

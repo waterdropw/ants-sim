@@ -1,0 +1,18 @@
+# Deneubourg & Goss (1989/1990) Argentine-ant double-bridge experiments;
+# Camazine et al. (2001) "Self-Organization in Biological Systems" ch.13.
+metric = "bridge_short_path_fraction"
+source = "Deneubourg/Goss 1989/1990; Camazine et al. 2001 synthesis"
+caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a per-colony copy of a copyrighted dataset. Colony sizes, species (Linepithema humile), and timing differ from the model; the model's tick<->seconds is undefined. Quantitative-magnitude fit, not a statistical fit."
+description = "Fraction of trail traffic on the SHORTER bridge. Real colonies converge to ~80-90% on the short branch."
+
+# post-convergence short-bridge fraction across replicates
+[[datapoints]]
+y = 0.82
+y_lo = 0.80
+y_hi = 0.90
+
+# initial ~50/50 split before pheromone feedback amplifies the short path
+[[datapoints]]
+y = 0.55
+y_lo = 0.50
+y_hi = 0.60

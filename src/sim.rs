@@ -1,0 +1,776 @@
+//! Simulator — owns world + ants + RNG, drives one fixed-timestep tick.
+
+use crate::ant::Ant;
+use crate::genome::Genome;
+use crate::world::spatial_hash::SpatialHash;
+use crate::world::{Vec2, World, Channel};
+use rand::Rng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rayon::prelude::*;
+
+pub struct Simulator {
+    pub world: World,
+    pub ants: Vec<Ant>,
+    pub tick: u64,
+    pub rng: ChaCha8Rng,
+    pub paused: bool,
+    /// food collected (colony-level metric)
+    pub collected: f32,
+    /// colony shared energy pool (T7.3 trophallaxis): foragers deposit here
+    /// on delivery, nest ants draw from it — the "shared stomach."
+    pub colony_energy: f32,
+    /// per-colony collected (T4.3 coevolution)
+    pub collected_a: f32,
+    pub collected_b: f32,
+    pub seed: u64,
+    /// per-source delivery counts (telemetry for M3/M5)
+    pub source_visits: Vec<u32>,
+    /// enable ant-ant interaction bookkeeping (spatial hash rebuild each tick)
+    pub interact: bool,
+    /// use the ANN decision layer (T2.2) instead of the FSM
+    pub brain_ann: bool,
+    /// use LIF spiking decision layer (T3-gap9)
+    pub brain_snn: bool,
+    pub brain_mb: bool,
+    /// FSM + central-complex (CX) neural path integration (T9)
+    pub brain_cx: bool,
+    /// territorial war mode (T6.3): ants attack enemy-colony ants
+    pub war: bool,
+    /// seasonal/ecological dynamics (T7.7): food regrows, predators raid
+    pub seasonal: bool,
+    /// T22: ablation flags (sufficiency/prediction experiments). Each disables
+    /// one mechanism to measure its behavioral consequence — turning "mechanism
+    /// X is sufficient for behavior Y" into a falsifiable prediction mapped to
+    /// a real intervention (OA knockdown / pheromone disruption / nurse removal).
+    pub ablate_octopamine: bool,
+    pub ablate_trail: bool,
+    pub ablate_eclosion: bool,
+    /// T22: home-vector (path integration) ablation — zero home_hx/hy + cx_hv
+    /// each tick so ants cannot path-integrate home (PI-lesion analog).
+    pub ablate_homevector: bool,
+    /// T22: reward-dopamine ablation — skip dopamine_reward release (PAM-silence
+    /// analog; gates appetitive LTP off).
+    pub ablate_reward: bool,
+    /// T22: punish-dopamine ablation — skip dopamine_punish release (PPL1-silence
+    /// analog; gates aversive LTD off).
+    pub ablate_punish: bool,
+    /// T22: vision ablation (blinding analog) — propagated to per-ant flag,
+    /// sensors skips visual detection.
+    pub ablate_vision: bool,
+    /// T22: STDP ablation (plasticity-blockade analog) — propagated to per-ant
+    /// flag, mb/snn skip lifetime synaptic plasticity.
+    pub ablate_stdp: bool,
+    pub spatial: SpatialHash,
+}
+
+impl Simulator {
+    pub fn new(width: usize, height: usize, seed: u64, genome: &Genome) -> Self {
+        let mut world = World::new(
+            width,
+            height,
+            Vec2::new(width as f32 / 2.0, height as f32 / 2.0),
+            6.0,
+        );
+        // default food source for the single-ant M2 loop
+        world.food.push(crate::world::FoodSource {
+            pos: Vec2::new(width as f32 * 0.8, height as f32 * 0.5),
+            radius: 4.0,
+            amount: 1_000_000.0, // effectively non-depleting; M3 steady state
+        });
+
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let n = 40; // M1/M2 colony size; tune via GUI in M3
+        let mut ants = Vec::with_capacity(n);
+        for i in 0..n {
+            ants.push(spawn_ant(width, height, genome, &mut rng, seed, i as u64));
+        }
+        Self {
+            world,
+            ants,
+            tick: 0,
+            rng,
+            paused: false,
+            collected: 0.0,
+            colony_energy: 0.0,
+            collected_a: 0.0,
+            collected_b: 0.0,
+            seed,
+            source_visits: Vec::new(),
+            interact: false,
+            brain_ann: false,
+            brain_snn: false,
+            brain_mb: false,
+            brain_cx: false,
+            war: false,
+            seasonal: false,
+            ablate_octopamine: false,
+            ablate_trail: false,
+            ablate_eclosion: false,
+            ablate_homevector: false,
+            ablate_reward: false,
+            ablate_punish: false,
+            ablate_vision: false,
+            ablate_stdp: false,
+            spatial: SpatialHash::new(width, height),
+        }
+    }
+
+    pub fn step(&mut self) {
+        if self.paused {
+            return;
+        }
+        // 1. chemistry (diffuse + evaporate) — writes its own buffers
+        self.world.step_chemistry();
+
+        // 2. ant step in parallel. Each ant owns its RNG, and deposits are
+        //    queued (not applied inline) so there's no shared mutable field.
+        //    Disjoint borrows of self.ants / self.world via a free fn.
+        // T22 ablation: zero octopamine each tick so the arousal pathway can't
+        // drive exploration/vigor/aggression/CPG-speed (OA-knockdown analog).
+        if self.ablate_octopamine {
+            for a in self.ants.iter_mut() {
+                a.octopamine = 0.0;
+            }
+        }
+        // T22 ablation: propagate per-ant ablation flags (vision / STDP) and
+        // zero the path-integration home vector (PI-lesion analog).
+        if self.ablate_homevector {
+            for a in self.ants.iter_mut() {
+                a.home_hx = 0.0;
+                a.home_hy = 0.0;
+                a.cx_hv_x = 0.0;
+                a.cx_hv_y = 0.0;
+            }
+        }
+        for a in self.ants.iter_mut() {
+            a.ablate_vision = self.ablate_vision;
+            a.ablate_stdp = self.ablate_stdp;
+        }
+        step_ants(&mut self.ants, &self.world, self.brain_ann, self.brain_snn, self.brain_mb, self.brain_cx);
+
+        // 3. serial flush: apply deposits + attacks + sum deliveries (race-free).
+        if self.source_visits.len() < self.world.food.len() {
+            self.source_visits.resize(self.world.food.len(), 0);
+        }
+        for a in self.ants.iter() {
+            for (ch, x, y, amt) in &a.pending_deposits {
+                // T22 ablation: skip Trail deposits (pheromone-disruption analog
+                // — no recruitment trail, ACO can't form).
+                if self.ablate_trail && *ch == Channel::Trail {
+                    continue;
+                }
+                self.world.deposit(*ch, *x, *y, *amt);
+            }
+            for (idx, dmg) in &a.pending_attacks {
+                if let Some(e) = self.world.enemies.get_mut(*idx) {
+                    e.health -= *dmg;
+                }
+            }
+            // T4.3: deplete food on pickup (enables competition for limited food)
+            if let Some(i) = a.pending_pickup {
+                if let Some(f) = self.world.food.get_mut(i) {
+                    if f.amount > 0.0 {
+                        f.amount -= 1.0;
+                    }
+                }
+            }
+            self.collected += a.delivered as f32;
+            if a.delivered > 0 {
+                match a.colony_id {
+                    1 => self.collected_b += a.delivered as f32,
+                    _ => self.collected_a += a.delivered as f32,
+                }
+                // trophallaxis (T7.3): delivery adds energy to shared pool
+                self.colony_energy += a.delivered as f32 * 0.5;
+            }
+            if let Some(i) = a.delivered_source {
+                if i < self.source_visits.len() {
+                    self.source_visits[i] += 1;
+                }
+            }
+        }
+        // T16: reward-dopamine release on delivery/pickup (PAM analog → LTP).
+        // T17: satiety modulation — effective reward gain scales with energy
+        // deficit (hungry forager → bigger reward → stronger LTP). Centered
+        // (energy=0.5 → base) so avg behavior ≈ Tier 16 baseline.
+        // T13: delivery also triggers neurogenesis — the MB grows with
+        // foraging experience (developmental structural plasticity).
+        for a in self.ants.iter_mut() {
+            let eff_reward = (a.genome.mb_dopamine_reward_gain
+                * (1.0 + a.genome.mb_satiety_gain * (1.0 - 2.0 * a.energy)))
+                .max(0.0);
+            // T22 ablation: skip reward-dopamine release (PAM-silence analog).
+            let eff_reward = if self.ablate_reward { 0.0 } else { eff_reward };
+            if a.delivered > 0 {
+                a.dopamine_reward = (a.dopamine_reward + eff_reward)
+                    .min(crate::genome::DOPAMINE_MAX);
+                a.grow_mb(a.genome.mb_neurogenesis * a.delivered as f32);
+            }
+            if a.pending_pickup.is_some() {
+                a.dopamine_reward = (a.dopamine_reward + eff_reward * 0.5)
+                    .min(crate::genome::DOPAMINE_MAX);
+            }
+        }
+        // trophallaxis (T7.3): redistribute colony energy to nest ants.
+        // Nest ants (within nest_radius) draw from the shared pool — modeling
+        // mouth-to-mouth food sharing. Foragers deposit (above), nest-mates draw.
+        if self.colony_energy > 0.0 && !self.ants.is_empty() {
+            let nr2 = self.world.nest_radius * self.world.nest_radius;
+            let nx = self.world.nest.x;
+            let ny = self.world.nest.y;
+            let rr = self.ants[0].genome.recharge_rate;
+            let mut pool = self.colony_energy;
+            for a in self.ants.iter_mut() {
+                if pool <= 0.0 { break; }
+                let dx = a.pos.x - nx;
+                let dy = a.pos.y - ny;
+                if dx * dx + dy * dy <= nr2 && a.energy < 1.0 {
+                    let transfer = rr.min(pool).min(1.0 - a.energy);
+                    a.energy += transfer;
+                    pool -= transfer;
+                }
+            }
+            self.colony_energy = pool;
+        }
+        // territorial war (T6.3): melee — ants damage nearby enemy-colony ants.
+        // T18.4: O(n²) pairwise scan replaced with the spatial hash (rebuild +
+        // query_near within WAR_RANGE), so large war colonies scale O(n·k).
+        // Gated by `war`.
+        if self.war {
+            const WAR_RANGE: f32 = 2.5;
+            const WAR_DMG: f32 = 0.15;
+            let n = self.ants.len();
+            let pos: Vec<Vec2> = self.ants.iter().map(|a| a.pos).collect();
+            let cols: Vec<u8> = self.ants.iter().map(|a| a.colony_id).collect();
+            let deads: Vec<bool> = self.ants.iter().map(|a| a.dead).collect();
+            self.spatial.rebuild(&pos);
+            let mut dmg = vec![0.0f32; n];
+            for i in 0..n {
+                if deads[i] {
+                    continue;
+                }
+                let pi = pos[i];
+                let ci = cols[i];
+                // count each enemy pair once (j > i); add WAR_DMG to both.
+                self.spatial.query_near(&pos, pi, WAR_RANGE, |j, _d2| {
+                    if j > i && !deads[j] && cols[j] != ci {
+                        dmg[i] += WAR_DMG;
+                        dmg[j] += WAR_DMG;
+                    }
+                });
+            }
+            for (i, a) in self.ants.iter_mut().enumerate() {
+                if dmg[i] > 0.0 {
+                    a.health -= dmg[i];
+                    // T16: damage is the aversive US → release punish dopamine
+                    // (PPL1 analog) so MB/ANN STDP does LTD on the KCs/hidden
+                    // units active when the ant was hurt → avoidance learning.
+                    // T22 ablation: skip punish release (PPL1-silence analog).
+                    if !self.ablate_punish {
+                        a.dopamine_punish = (a.dopamine_punish + a.genome.mb_dopamine_punish_gain)
+                            .min(crate::genome::DOPAMINE_MAX);
+                    }
+                    if a.health <= 0.0 {
+                        a.dead = true;
+                    }
+                }
+            }
+        }
+        // remove dead enemies (indices were valid during the parallel step)
+        self.world.enemies.retain(|e| e.health > 0.0);
+        // remove starved ants (T1.2)
+        self.ants.retain(|a| !a.dead);
+        // brood stigmergy (T4.1): neglect decays, nurses' tending grows it.
+        const BROOD_DECAY: f32 = 0.0025;
+        self.world.brood *= 1.0 - BROOD_DECAY;
+        let mut tend = 0.0f32;
+        for a in self.ants.iter() {
+            tend += a.pending_brood;
+        }
+        self.world.brood += tend;
+        if self.world.brood < 0.0 {
+            self.world.brood = 0.0;
+        }
+        // T7.5 brood-to-adult: brood ecloses into new ants when tended enough.
+        // Each new ant consumes brood biomass and starts at the nest (age 0,
+        // young → Nurse). Colony growth is gated by nursing + food (colony_energy
+        // feeds nurses). Capped to prevent runaway growth/perf degradation.
+        const BROOD_ECLOSION: f32 = 50.0;
+        const MAX_COLONY: usize = 1000;
+        // T22 ablation: skip eclosion (nurse-removal/brood-development analog
+        // — brood never matures into adults, colony can't grow).
+        while !self.ablate_eclosion
+            && self.world.brood >= BROOD_ECLOSION
+            && self.ants.len() < MAX_COLONY
+        {
+            self.world.brood -= BROOD_ECLOSION;
+            let mut er = ChaCha8Rng::seed_from_u64(self.seed ^ (self.tick * 0xEC10));
+            let g = &self.ants[0].genome;
+            let na = spawn_ant(
+                self.world.width, self.world.height, g, &mut er,
+                self.seed, self.ants.len() as u64,
+            );
+            self.ants.push(na);
+        }
+        // T7.7 seasonal dynamics: food regrows (renewable resource) +
+        // periodic predator raids (every 500 ticks near the nest).
+        if self.seasonal {
+            for f in self.world.food.iter_mut() {
+                f.amount = (f.amount + 0.3).min(300.0); // regrowth, capped
+            }
+            if self.tick > 0 && self.tick % 500 == 0 {
+                let nest = self.world.nest;
+                let th = (self.tick as f32 * 0.1).sin();
+                let r = self.world.nest_radius + 15.0;
+                self.world.enemies.push(crate::world::Enemy {
+                    pos: crate::world::Vec2::new(nest.x + r * th.cos(), nest.y + r * th.sin()),
+                    radius: 2.0,
+                    health: 10.0,
+                });
+            }
+        }
+        // ant-ant interaction bookkeeping (exercises spatial hash when enabled)
+        if self.interact {
+            let pos: Vec<Vec2> = self.ants.iter().map(|a| a.pos).collect();
+            self.spatial.rebuild(&pos);
+        }
+
+        self.tick += 1;
+    }
+
+    pub fn reset(&mut self, seed: u64, genome: &Genome) {
+        let w = self.world.width;
+        let h = self.world.height;
+        *self = Self::new(w, h, seed, genome);
+    }
+
+    /// Replace the colony size (re-spawns ants around the nest).
+    pub fn set_colony_size(&mut self, n: usize, genome: &Genome) {
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed ^ 0xA5A5);
+        let mut ants = Vec::with_capacity(n);
+        for i in 0..n as u64 {
+            ants.push(spawn_ant(
+                self.world.width,
+                self.world.height,
+                genome,
+                &mut rng,
+                self.seed,
+                i,
+            ));
+        }
+        self.ants = ants;
+    }
+
+    /// T4.3: spawn two colonies (genome_a id 0, genome_b id 1) sharing the
+    /// world, competing for the same (limited) food.
+    pub fn set_two_colonies(&mut self, n: usize, genome_a: &Genome, genome_b: &Genome) {
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed ^ 0xC0DE);
+        let mut ants = Vec::with_capacity(n);
+        for i in 0..n as u64 {
+            let (g, id) = if i % 2 == 0 { (genome_a, 0u8) } else { (genome_b, 1u8) };
+            let mut a = spawn_ant(self.world.width, self.world.height, g, &mut rng, self.seed, i);
+            a.colony_id = id;
+            ants.push(a);
+        }
+        self.ants = ants;
+    }
+
+    /// Spawn a colony where each ant's genome is drawn (with a light mutation)
+    /// from a `pool` — used by multi-level selection (C5), where ants with
+    /// different genotypes compete within one colony and the best carriers
+    /// propagate.
+    pub fn set_colony_from_pool(&mut self, pool: &[Genome], n: usize, rng: &mut ChaCha8Rng) {
+        use rand::Rng;
+        let mut ants = Vec::with_capacity(n);
+        for i in 0..n as u64 {
+            let base = &pool[rng.gen_range(0..pool.len())];
+            let g = base.mutate(rng);
+            ants.push(spawn_ant(
+                self.world.width,
+                self.world.height,
+                &g,
+                rng,
+                self.seed,
+                i,
+            ));
+        }
+        self.ants = ants;
+    }
+    /// from `base` — heterogeneous genotypes within one colony. This is the
+    /// phase-2 stand-in for genetic variation that selection acts on.
+    pub fn set_colony_diverse(&mut self, n: usize, base: &Genome) {
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed ^ 0xA5A5);
+        let mut ants = Vec::with_capacity(n);
+        for i in 0..n as u64 {
+            let g = base.mutate(&mut rng);
+            ants.push(spawn_ant(
+                self.world.width,
+                self.world.height,
+                &g,
+                &mut rng,
+                self.seed,
+                i,
+            ));
+        }
+        self.ants = ants;
+    }
+
+    /// Apply an environment preset (clears food/enemies/walls/field, sets new).
+    pub fn apply_environment(&mut self, env: &crate::environment::Environment) {
+        self.world.food = env.foods.clone();
+        self.world.enemies = env.enemies.clone();
+        self.world.walls = env.walls.clone();
+        self.world.field.clear();
+        self.collected = 0.0;
+        self.tick = 0;
+        self.source_visits.clear();
+    }
+
+    /// T1.4 symmetric two-bridge: ONE food on the direct line, a thin vertical
+    /// wall with two symmetric gaps (50/50 fork at the nest), PLUS a second
+    /// wall block that forces the bottom route to detour far down. So both
+    /// routes get traffic but the top is much shorter → pheromone amplifies it
+    /// (classic ACO two-bridge).
+    pub fn scenario_two_bridge(&mut self) {
+        let w = self.world.width as f32;
+        let h = self.world.height as f32;
+        self.world.nest = Vec2::new(40.0, h * 0.5);
+        self.world.food.clear();
+        self.world.food.push(crate::world::FoodSource {
+            pos: Vec2::new(w - 40.0, h * 0.5),
+            radius: 4.0,
+            amount: 1_000_000.0,
+        });
+        self.world.walls.clear();
+        // wall 1: vertical, symmetric gaps 24 above/below the direct line
+        self.world.walls.push(crate::world::Wall {
+            x0: w * 0.30,
+            y0: h * 0.5 - 24.0,
+            x1: w * 0.32,
+            y1: h * 0.5 + 24.0,
+        });
+        // wall 2: block south of the bottom gap → bottom route must detour
+        // down to y>0.80h, across, then back up (long). Top route is clear.
+        self.world.walls.push(crate::world::Wall {
+            x0: w * 0.34,
+            y0: h * 0.5 + 24.0,
+            x1: w * 0.66,
+            y1: h * 0.80,
+        });
+        self.world.field.clear();
+        self.collected = 0.0;
+        self.tick = 0;
+        self.source_visits.clear();
+    }
+
+    /// M3 two-source selection: two food sources in divergent directions at
+    /// different distances. With gradient-ascent trail following, outbound
+    /// ants at the nest climb whichever trail is denser; the nearer source
+    /// (shorter round trip → denser Trail) recruits more → positive feedback.
+    /// The colony should concentrate foraging on the near source.
+    pub fn scenario_two_branch(&mut self) {
+        let w = self.world.width as f32;
+        let h = self.world.height as f32;
+        let nest = self.world.nest;
+        self.world.walls.clear();
+        self.world.food.clear();
+        // near: straight right, ~51 cells
+        self.world.food.push(crate::world::FoodSource {
+            pos: Vec2::new(nest.x + w * 0.20, nest.y),
+            radius: 4.0,
+            amount: 1_000_000.0,
+        });
+        // far: straight up, ~98 cells, divergent & mid-field (not a corner)
+        self.world.food.push(crate::world::FoodSource {
+            pos: Vec2::new(nest.x, nest.y - h * 0.38),
+            radius: 4.0,
+            amount: 1_000_000.0,
+        });
+        self.world.field.clear();
+        self.collected = 0.0;
+        self.tick = 0;
+        self.source_visits.clear();
+    }
+
+    /// M4: drop an enemy near the nest to trigger alarm + collective defense.
+    pub fn spawn_enemy_near_nest(&mut self) {
+        let nest = self.world.nest;
+        let mut rng = ChaCha8Rng::seed_from_u64(self.seed ^ self.tick);
+        let th: f32 = rng.gen_range(0.0f32..std::f32::consts::TAU);
+        let r = self.world.nest_radius + 8.0;
+        self.world.enemies.push(crate::world::Enemy {
+            pos: Vec2::new(nest.x + r * th.cos(), nest.y + r * th.sin()),
+            radius: 2.0,
+            health: 20.0,
+        });
+    }
+
+    /// M2 default scenario: single food source to the right of the nest.
+    pub fn scenario_single(&mut self) {
+        let w = self.world.width as f32;
+        self.world.food.clear();
+        self.world.food.push(crate::world::FoodSource {
+            pos: Vec2::new(self.world.nest.x + w * 0.3, self.world.nest.y),
+            radius: 4.0,
+            amount: 1_000_000.0,
+        });
+        self.world.field.clear();
+        self.collected = 0.0;
+        self.tick = 0;
+    }
+}
+
+fn spawn_ant(
+    w: usize,
+    h: usize,
+    genome: &Genome,
+    rng: &mut ChaCha8Rng,
+    world_seed: u64,
+    index: u64,
+) -> Ant {
+    let cx = w as f32 / 2.0;
+    let cy = h as f32 / 2.0;
+    let r: f32 = rng.gen_range(0.0f32..6.0f32);
+    let th: f32 = rng.gen_range(0.0f32..std::f32::consts::TAU);
+    let pos = Vec2::new(cx + r * th.cos(), cy + r * th.sin());
+    let heading: f32 = rng.gen_range(0.0f32..std::f32::consts::TAU);
+    // per-ant RNG: deterministic mix of world seed and ant index
+    let ant_seed = world_seed
+        .wrapping_mul(0x9E3779B97F4A7C15)
+        .wrapping_add(index.wrapping_mul(0x632BE59BD01B5C35));
+    let mut ant = Ant::new(pos, heading, genome, ant_seed);
+    // task-threshold heterogeneity: ~30% guards (jitter<0), rest foragers —
+    // matching the empirical minor-worker fraction. Biased range so P(<0)≈0.3.
+    ant.task_jitter = rng.gen_range(-0.4..=1.0);
+    ant
+}
+
+fn step_ants(ants: &mut [Ant], world: &World, brain_ann: bool, brain_snn: bool, brain_mb: bool, brain_cx: bool) {
+    ants.par_iter_mut().for_each(|a| a.update(world, brain_ann, brain_snn, brain_mb, brain_cx));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::Channel;
+
+    fn sim_two(seed: u64) -> Simulator {
+        let g = Genome::default();
+        let mut s = Simulator::new(96, 96, seed, &g);
+        s.set_colony_size(60, &g);
+        s.scenario_single();
+        s
+    }
+
+    #[test]
+    fn determinism_two_runs_equal() {
+        let mut a = sim_two(7);
+        let mut b = sim_two(7);
+        for _ in 0..120 {
+            a.step();
+            b.step();
+        }
+        assert!((a.collected - b.collected).abs() < 1e-6, "collected differs");
+        assert_eq!(a.ants.len(), b.ants.len(), "alive count differs");
+    }
+
+    #[test]
+    fn brood_never_negative() {
+        let mut s = sim_two(3);
+        for _ in 0..300 {
+            s.step();
+            assert!(s.world.brood >= 0.0, "brood went negative");
+        }
+    }
+
+    #[test]
+    fn field_never_negative() {
+        let mut s = sim_two(9);
+        for _ in 0..200 {
+            s.step();
+        }
+        for ch in [Channel::Trail, Channel::Home, Channel::Alarm, Channel::Recruitment] {
+            for &v in s.world.field.channel_slice(ch) {
+                assert!(v >= 0.0, "field cell negative");
+            }
+        }
+    }
+
+    #[test]
+    fn coevolve_within_food_budget() {
+        let g = Genome::default();
+        let gb = g.mutate(&mut rand_chacha::ChaCha8Rng::seed_from_u64(1));
+        let mut s = Simulator::new(96, 96, 5, &g);
+        s.set_colony_size(60, &g);
+        s.scenario_single();
+        for f in s.world.food.iter_mut() {
+            f.amount = 50.0; // limited
+        }
+        let budget: f32 = s.world.food.iter().map(|f| f.amount).sum();
+        s.set_two_colonies(60, &g, &gb);
+        for _ in 0..400 {
+            s.step();
+        }
+        let total = s.collected_a + s.collected_b;
+        assert!(total <= budget + 1.0, "collected {total} exceeds budget {budget}");
+    }
+
+    /// T16: food delivery/pickup releases reward dopamine (PAM analog).
+    #[test]
+    fn reward_dopamine_released_on_foraging() {
+        let g = Genome::default();
+        let mut s = Simulator::new(96, 96, 11, &g);
+        s.brain_mb = true;
+        s.set_colony_size(60, &g);
+        s.scenario_single();
+        let mut found = false;
+        for _ in 0..400 {
+            s.step();
+            if s.ants.iter().any(|a| a.dopamine_reward > 0.0) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "no ant ever released reward dopamine (no delivery/pickup?)");
+    }
+
+    /// T16: war damage releases punish dopamine (PPL1 analog).
+    #[test]
+    fn punish_dopamine_released_on_war_damage() {
+        let g = Genome::default();
+        let gb = g.mutate(&mut rand_chacha::ChaCha8Rng::seed_from_u64(1));
+        let mut s = Simulator::new(96, 96, 5, &g);
+        s.brain_mb = true;
+        s.war = true;
+        s.set_two_colonies(40, &g, &gb);
+        let mut found = false;
+        for _ in 0..600 {
+            s.step();
+            if s.ants.iter().any(|a| a.dopamine_punish > 0.0) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "no ant ever released punish dopamine (no war damage?)");
+    }
+
+    /// T16: reward dopamine gates LTP. With reward_gain=0.5, foraging drives
+    /// LTP → some KC→out weight rises above the innate seed. With reward_gain=0,
+    /// LTP is gated off → no weight rises above seed (only baseline LTD).
+    #[test]
+    fn mb_reward_dopamine_enables_ltp() {
+        let seed = Genome::default().mb_weights.clone();
+        let run = |reward_gain: f32| -> f32 {
+            let mut g = Genome::default();
+            g.mb_dopamine_reward_gain = reward_gain;
+            let mut s = Simulator::new(96, 96, 11, &g);
+            s.brain_mb = true;
+            s.set_colony_size(60, &g);
+            s.scenario_single();
+            for _ in 0..500 {
+                s.step();
+            }
+            let kc = crate::genome::MB_KC;
+            let out = crate::genome::MB_OUT;
+            let al_in = crate::genome::MB_AL_INPUTS;
+            let al_g = crate::genome::MB_AL_GLOM;
+            let off_w_out = al_in * al_g + al_g + al_g * al_g + al_g * kc + kc;
+            let mut max_rise = 0.0f32;
+            for a in &s.ants {
+                for o in 0..out {
+                    for k in 0..kc {
+                        let idx = off_w_out + o * kc + k;
+                        let d = a.learned_mb_w[idx] - seed[idx];
+                        if d > max_rise {
+                            max_rise = d;
+                        }
+                    }
+                }
+            }
+            max_rise
+        };
+        let with_reward = run(0.5);
+        let no_reward = run(0.0);
+        assert!(with_reward > 0.0, "reward dopamine should drive LTP: {}", with_reward);
+        assert!(
+            with_reward > no_reward,
+            "reward should enable more LTP than no-reward: {} vs {}",
+            with_reward,
+            no_reward
+        );
+    }
+
+    /// T17: satiety modulation — a hungry forager (low energy) releases more
+    /// reward dopamine on delivery than a sated one (high energy), same genome.
+    #[test]
+    fn satiety_modulates_reward_dopamine() {
+        let g = Genome::default();
+        let mk = |energy: f32| -> f32 {
+            let mut s = Simulator::new(64, 64, 1, &g);
+            s.brain_mb = true;
+            let mut ant =
+                crate::ant::Ant::new(crate::world::Vec2::new(32.0, 32.0), 0.0, &g, 1);
+            ant.carrying = true;
+            ant.energy = energy;
+            ant.age = 1000; // past nurse_age → foraging logic, not nursing
+            s.ants = vec![ant];
+            s.step();
+            s.ants[0].dopamine_reward
+        };
+        let hungry = mk(0.1);
+        let sated = mk(1.0);
+        assert!(
+            hungry > sated,
+            "hungry forager should release more reward dopamine: {} vs {}",
+            hungry,
+            sated
+        );
+    }
+
+    /// T17: AL→KC (W_kc) Hebbian plasticity, reward-gated on substrate KCs.
+    /// With reward dopamine, some substrate KC's AL→KC weight rises above the
+    /// seed; with reward_gain=0 (gate off) no W_kc weight rises.
+    #[test]
+    fn mb_wkc_plasticity_reward_ltp() {
+        let seed = Genome::default().mb_weights.clone();
+        let run = |reward_gain: f32| -> f32 {
+            let mut g = Genome::default();
+            g.mb_dopamine_reward_gain = reward_gain;
+            let mut s = Simulator::new(96, 96, 11, &g);
+            s.brain_mb = true;
+            s.set_colony_size(60, &g);
+            s.scenario_single();
+            for _ in 0..600 {
+                s.step();
+            }
+            let kc = crate::genome::MB_KC;
+            let al_g = crate::genome::MB_AL_GLOM;
+            let al_in = crate::genome::MB_AL_INPUTS;
+            let det = crate::genome::MB_DETECTOR_KCS;
+            let off_w_kc = al_in * al_g + al_g + al_g * al_g;
+            let mut max_rise = 0.0f32;
+            for a in &s.ants {
+                for k in det..kc {
+                    for gl in 0..al_g {
+                        let idx = off_w_kc + k * al_g + gl;
+                        let d = a.learned_mb_w[idx] - seed[idx];
+                        if d > max_rise {
+                            max_rise = d;
+                        }
+                    }
+                }
+            }
+            max_rise
+        };
+        let with_reward = run(0.5);
+        let no_reward = run(0.0);
+        assert!(with_reward > 0.0, "reward should drive W_kc LTP: {}", with_reward);
+        assert!(
+            with_reward > no_reward,
+            "reward W_kc LTP {} should exceed no-reward {}",
+            with_reward,
+            no_reward
+        );
+    }
+}

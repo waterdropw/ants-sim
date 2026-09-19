@@ -1,0 +1,10 @@
+EVOLVE env=predator pop=8 gens=6 eval_ticks=10000 colony=200
+  gen 0  best=167.50 mean=21.31 worst=0.00 div=0.1752
+  gen 1  best=167.50 mean=21.94 worst=0.00 div=0.2000
+  gen 2  best=167.50 mean=26.81 worst=0.00 div=0.2136
+  gen 3  best=167.50 mean=42.81 worst=0.00 div=0.2224
+  gen 4  best=167.50 mean=56.19 worst=0.00 div=0.2255
+  gen 5  best=167.50 mean=45.94 worst=0.00 div=0.2281
+  diversity genotypic init=0.1752 final=0.2281 | behavioral init=0.1192 final=0.1653 | open-ended(non-collapse)=true
+BEST score=167.50 collected=167.5 mean_def_frac=0.000 fs=3.000 explore=0.120 aggression=0.500
+  saved: results/evolved_mb_predator_10000.toml + results/evolved_mb_predator_10000_history.csv

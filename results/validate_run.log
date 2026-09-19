@@ -1,0 +1,73 @@
+warning: `/Users/hugo/.cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: unused variable: `world`
+   --> src/ant/brain.rs:306:47
+    |
+306 | pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `world`
+   --> src/ant/brain.rs:434:47
+    |
+434 | pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+
+warning: variable does not need to be mutable
+   --> src/evolution.rs:459:9
+    |
+459 |     let mut novelty_series: Vec<f64> = Vec::new();
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seasonal`
+   --> src/evolution.rs:450:5
+    |
+450 |     seasonal: bool,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_seasonal`
+
+warning: `ants-sim` (bin "ants-sim") generated 4 warnings (run `cargo fix --bin "ants-sim" -p ants-sim` to apply 4 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running `target/release/ants-sim --headless --validate --ticks 3000`
+VALIDATE brains=["fsm", "ann", "cppn", "snn", "mb", "cx"] envs=["rich_close", "scarce_far", "predator", "patchy", "maze"] ticks=3000 colony=200
+--------------------------------------------------------------------------------------
+brain  env          surv    trail  caste  grew   forag  pass 
+--------------------------------------------------------------------------------------
+fsm    rich_close   0.95    Y      Y      Y      Y      5 /5
+fsm    scarce_far   0.00    -      -      Y      -      1 /5
+fsm    predator     0.15    Y      Y      Y      Y      5 /5
+fsm    patchy       0.01    Y      Y      Y      Y      4 /5
+fsm    maze         0.00    -      -      Y      -      1 /5
+ann    rich_close   0.77    Y      Y      -      Y      4 /5
+ann    scarce_far   0.00    -      -      -      -      0 /5
+ann    predator     0.07    Y      Y      -      Y      3 /5
+ann    patchy       0.14    Y      Y      -      Y      4 /5
+ann    maze         0.00    -      -      -      -      0 /5
+cppn   rich_close   0.77    Y      Y      -      Y      4 /5
+cppn   scarce_far   0.00    -      -      -      -      0 /5
+cppn   predator     0.07    Y      Y      -      Y      3 /5
+cppn   patchy       0.14    Y      Y      -      Y      4 /5
+cppn   maze         0.00    -      -      -      -      0 /5
+snn    rich_close   0.41    Y      Y      Y      Y      5 /5
+snn    scarce_far   0.00    -      -      Y      -      1 /5
+snn    predator     0.08    Y      Y      Y      Y      4 /5
+snn    patchy       0.05    Y      Y      Y      Y      4 /5
+snn    maze         0.00    -      -      Y      -      1 /5
+mb     rich_close   0.01    Y      -      Y      Y      3 /5
+mb     scarce_far   0.00    -      -      Y      -      1 /5
+mb     predator     0.00    -      -      Y      -      1 /5
+mb     patchy       0.00    Y      Y      Y      Y      4 /5
+mb     maze         0.00    -      -      Y      -      1 /5
+cx     rich_close   0.43    Y      Y      Y      Y      5 /5
+cx     scarce_far   0.00    -      -      Y      -      1 /5
+cx     predator     0.06    Y      Y      Y      Y      4 /5
+cx     patchy       0.00    -      -      Y      -      1 /5
+cx     maze         0.00    -      -      Y      -      1 /5
+--------------------------------------------------------------------------------------
+aggregate: 75/150 checks passed (50%)
+saved: results/validate.md

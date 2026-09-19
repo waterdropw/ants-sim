@@ -1,0 +1,10 @@
+EVOLVE env=rich_close pop=8 gens=6 eval_ticks=3000 colony=200
+  gen 0  best=5669.20 mean=4211.81 worst=2250.00 div=0.1752
+  gen 1  best=6093.70 mean=5119.76 worst=3086.00 div=0.2020
+  gen 2  best=7876.90 mean=5535.31 worst=3809.60 div=0.2453
+  gen 3  best=7876.90 mean=6944.14 worst=5913.00 div=0.2481
+  gen 4  best=8325.50 mean=7163.69 worst=4379.50 div=0.2397
+  gen 5  best=9188.00 mean=7115.31 worst=2240.30 div=0.2442
+  diversity genotypic init=0.1752 final=0.2442 | behavioral init=0.1249 final=0.1317 | open-ended(non-collapse)=true
+BEST score=9188.00 collected=9139.5 mean_def_frac=0.000 fs=2.304 explore=0.192 aggression=0.362
+  saved: results/evolved_fsm_rich_close_3000.toml + results/evolved_fsm_rich_close_3000_history.csv

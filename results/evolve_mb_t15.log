@@ -1,0 +1,38 @@
+warning: `/Users/hugo/.cargo/config` is deprecated in favor of `config.toml`
+  |
+  = help: if you need to support cargo 1.38 or earlier, you can symlink `config` to `config.toml`
+warning: unused variable: `world`
+   --> src/ant/brain.rs:306:47
+    |
+306 | pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `world`
+   --> src/ant/brain.rs:434:47
+    |
+434 | pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    |                                               ^^^^^ help: if this is intentional, prefix it with an underscore: `_world`
+
+warning: unused variable: `seasonal`
+   --> src/evolution.rs:329:5
+    |
+329 |     seasonal: bool,
+    |     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_seasonal`
+
+warning: `ants-sim` (bin "ants-sim") generated 3 warnings (run `cargo fix --bin "ants-sim" -p ants-sim` to apply 3 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.09s
+     Running `target/release/ants-sim --headless --evolve --brain mb --env rich_close --gens 8 --pop 10 --ticks 600 --n-seeds 3`
+EVOLVE env=rich_close pop=10 gens=8 eval_ticks=600 colony=200
+  gen 0  best=190.67 mean=69.75 worst=38.53 div=0.1793
+  gen 1  best=220.67 mean=80.60 worst=32.00 div=0.2110
+  gen 2  best=220.67 mean=91.17 worst=35.13 div=0.2190
+  gen 3  best=220.67 mean=121.62 worst=48.67 div=0.2378
+  gen 4  best=220.67 mean=109.79 worst=32.33 div=0.2482
+  gen 5  best=588.33 mean=174.96 worst=48.67 div=0.2475
+  gen 6  best=588.33 mean=145.51 worst=19.53 div=0.2515
+  gen 7  best=588.33 mean=210.11 worst=23.40 div=0.2454
+  diversity init=0.1793 final=0.2454 open-ended(non-collapse)=true
+BEST score=588.33 collected=539.7 mean_def_frac=0.000 fs=2.673 explore=0.194 aggression=0.625
+  saved: results/evolved_rich_close.toml + results/evolved_rich_close_history.csv

@@ -1,0 +1,15 @@
+{
+  "note": "Representative published values (order-of-magnitude) for the scalar ranges below. For explicit published DATPOINTS with sources + caveats and a quantitative fit, see literature/*.toml (bridge_deneubourg.toml, caste_gordon.toml) and `--compare-lit` FIT section. Sources: Deneubourg/Goss Argentine-ant bridge (~1989); Gordon task-allocation (Pogonomyrmex); trail-pheromone decay literature; Wehner & Muller (1988) / Muller & Wehner (1988) Cataglyphis fortis path integration; insect-MB reviews (Perez-Orive et al.) on Kenyon-cell sparseness; Heisenberg & Gerber / Davis Drosophila MB associative learning. Definitions and species differ; tick<->physical time is undefined. Use as a sanity-scale / explicit-datapoint check, not a statistical fit.",
+  "metrics": [
+    {"name": "bridge_short_path_fraction", "lit": "0.80-0.90", "lit_note": "Deneubourg/Goss: colony converges ~80-90% on the shorter bridge"},
+    {"name": "trail_pheromone_halflife", "lit": "minutes-hours", "lit_note": "real ant trail pheromone挥发; model tick<->s undefined"},
+    {"name": "active_forager_fraction", "lit": "~0.20-0.40", "lit_note": "Gordon: ~20-40% actively foraging at a time (defn differs; model 'forager'=non-guard caste, not active-at-instant)"},
+    {"name": "non_forager_caste_fraction", "lit": "species-dependent", "lit_note": "minor/major/nurse remainder; model ~0.30"},
+    {"name": "brood_care_requires_tending", "lit": "true", "lit_note": "brood survival depends on nurses"},
+    {"name": "path_selection_via_stigmergy", "lit": "true", "lit_note": "ACO: short path amplified by positive feedback"},
+    {"name": "cx_path_integration_drift", "lit": "~5-15% (Cataglyphis)", "lit_note": "Cataglyphis fortis PI homing error scales ~linearly with distance; model is more accurate (no sensory noise) — see --bench-cx"},
+    {"name": "cx_pi_direction_error", "lit": "a few degrees", "lit_note": "desert-ant PI direction stays tight; model dir_err ~0 deg (clean compass injection)"},
+    {"name": "mb_kc_sparsity", "lit": "~5-15% active", "lit_note": "insect MB Kenyon cells fire sparsely (Perez-Orive et al.); model KC_THRESH gates a sparse subset"},
+    {"name": "mb_associative_learning", "lit": "true (Drosophila)", "lit_note": "Drosophila MB: PAM-DAN (reward) / PPL1-DAN (punishment) dual dopaminergic pathways gate KC->MBON plasticity (Heisenberg/Gerber); model: dual reward/punish dopamine channels gating LTP/LTD + AL->KC Hebbian plasticity + satiety (drive-dependent reward) modulation"}
+  ]
+}

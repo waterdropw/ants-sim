@@ -1,0 +1,12 @@
+# Heisenberg & Gerber; Davis Drosophila MB olfactory conditioning
+# (aversive/reward learning curves — performance vs trial).
+metric = "mb_learning_ratio"
+source = "Heisenberg & Gerber Drosophila MB associative learning; Davis learning curves"
+caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a copy of a copyrighted dataset. Drosophila olfactory conditioning performance rises over ~6 trials then plateaus. Model signal: MB delivery rate (late/early window ratio) — >1 means foraging improved with experience (STDP learning). The model's 'trial' is a foraging bout, not an odor-shock pairing; comparison is qualitative (learning-improves-with-experience, ratio>1), not a trial-by-trial fit."
+description = "Learning improvement ratio (late/early performance). Drosophila: performance rises with experience (ratio>1). Model: MB late/early delivery-rate ratio."
+
+[[datapoints]]
+x = 1.0
+y = 1.5
+y_lo = 1.1
+y_hi = 3.0
