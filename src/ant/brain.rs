@@ -1235,6 +1235,28 @@ mod mb_tests {
         off_w_out + o * KN + k
     }
 
+    #[test]
+    fn mb_punishment_learning_decreases_active_approach_weight() {
+        let (mut ant, world) = mb_ant(0.0);
+        let s = Sensing {
+            trail_val: 0.8,
+            trail_bearing: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        let k = 0;
+        let idx = wout_idx(0, k);
+        let before = ant.learned_mb_w[idx];
+        ant.dopamine_punish = crate::genome::DOPAMINE_MAX;
+        for _ in 0..4 {
+            ant.age += 1;
+            mb_decide(&mut ant, &s, &world);
+        }
+        assert!(
+            ant.learned_mb_w[idx] < before,
+            "punished cue should weaken its active approach pathway"
+        );
+    }
+
     /// Outbound (not carrying) with Trail to the left → ant turns left
     /// (heading increases). The graded AL→turn reflex must sign-match the
     /// trail bearing — the fix for the binary-KC bang-bang limitation that

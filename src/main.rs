@@ -18,6 +18,9 @@ mod sim;
 mod viz;
 mod world;
 
+use ant::brain::mb_decide;
+use ant::sensors::Sensing;
+use ant::Ant;
 use eframe::egui;
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
@@ -179,6 +182,171 @@ fn configure_ablation(sim: &mut sim::Simulator, mechanism: &str, enabled: bool) 
     sim.ablate_cx_motor = enabled && mechanism == "cx_motor";
     sim.ablate_cpg_feedback = enabled && mechanism == "cpg_feedback";
     sim.ablate_contact = enabled && mechanism == "contact";
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LearningReadout {
+    approach_weight: f64,
+    avoidance_weight: f64,
+    kc_activity: f64,
+    approach_evidence: f64,
+}
+
+fn mb_weight_readout(ant: &Ant) -> LearningReadout {
+    let al_in = genome::MB_AL_INPUTS;
+    let al_g = genome::MB_AL_GLOM;
+    let kc_n = genome::MB_KC;
+    let out_n = genome::MB_OUT;
+    let off_w_out = al_in * al_g + al_g + al_g * al_g + al_g * kc_n + kc_n;
+    let mut readout = LearningReadout::default();
+    for output in 0..out_n {
+        let total = (0..kc_n)
+            .map(|kc| ant.learned_mb_w[off_w_out + output * kc_n + kc].abs() as f64)
+            .sum::<f64>();
+        if output < genome::MB_APPROACH_OUT {
+            readout.approach_weight += total;
+        } else {
+            readout.avoidance_weight += total;
+        }
+    }
+    readout.kc_activity = ant
+        .mb_kc_v
+        .iter()
+        .take(ant.mb_kc_active)
+        .filter(|&&value| value >= genome::KC_THRESH)
+        .count() as f64;
+    readout.approach_evidence = ant.mb_out_v[0] as f64;
+    readout
+}
+
+/// Focused circuit assay for the implemented MB eligibility and valence rules.
+/// Cues are abstract local chemical observations, and the output is a synaptic
+/// readout rather than an assertion about an animal's learned choice.
+fn run_learning_episode(seed: u64, phase: &str, delay: u32, ablate_stdp: bool) -> LearningReadout {
+    let g = genome::Genome::default();
+    let mut ant = Ant::new(world::Vec2::new(50.0, 50.0), 0.0, &g, seed);
+    ant.age = 1_000;
+    ant.mb_kc_active = genome::MB_KC;
+    ant.ablate_stdp = ablate_stdp;
+    let world = world::World::new(96, 96, world::Vec2::new(32.0, 32.0), 4.0);
+    let cue = match phase {
+        "avoidance" => Sensing {
+            alarm_val: 0.8,
+            alarm_bearing: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        },
+        _ => Sensing {
+            trail_val: 0.8,
+            trail_bearing: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        },
+    };
+    let cue_b = Sensing {
+        home_val: 0.8,
+        home_bearing: -std::f32::consts::FRAC_PI_2,
+        ..Default::default()
+    };
+    if matches!(phase, "blocking" | "blocking_control") {
+        // Compound-cue blocking: A is pre-rewarded only in the blocking arm,
+        // then A+B is rewarded in both arms. B is finally probed without DA.
+        // The control differs solely in prior A experience.
+        if phase == "blocking" {
+            for _ in 0..3 {
+                mb_decide(&mut ant, &cue, &world);
+                ant.age += 1;
+                ant.dopamine_reward = genome::DOPAMINE_MAX;
+                mb_decide(&mut ant, &cue, &world);
+                ant.age += 1;
+            }
+        }
+        let compound = Sensing {
+            trail_val: 0.8,
+            trail_bearing: std::f32::consts::FRAC_PI_2,
+            home_val: 0.8,
+            home_bearing: -std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            mb_decide(&mut ant, &compound, &world);
+            ant.age += 1;
+            ant.dopamine_reward = genome::DOPAMINE_MAX;
+            mb_decide(&mut ant, &compound, &world);
+            ant.age += 1;
+        }
+        ant.dopamine_reward = 0.0;
+        mb_decide(&mut ant, &cue_b, &world);
+        return mb_weight_readout(&ant);
+    }
+    // First cue stamps KC/output eligibility; a finite delay then tests the
+    // same ten-tick trace used by the MB STDP implementation.
+    mb_decide(&mut ant, &cue, &world);
+    ant.age = ant.age.saturating_add(delay.max(1));
+    match phase {
+        "acquisition" => ant.dopamine_reward = genome::DOPAMINE_MAX,
+        "reversal" | "avoidance" => ant.dopamine_punish = genome::DOPAMINE_MAX,
+        "extinction" => {}
+        _ => unreachable!("validated phase7 phase"),
+    }
+    // Re-presenting the CS is the model's discrete trial boundary: the
+    // decision step consumes the earlier eligibility trace under its DA gate.
+    for _ in 0..4 {
+        mb_decide(&mut ant, &cue, &world);
+        ant.age += 1;
+    }
+    mb_weight_readout(&ant)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RecruitmentReadout {
+    collected: f64,
+    trail_total: f64,
+    recruitment_total: f64,
+    contact_events: f64,
+}
+
+fn run_recruitment_trial(
+    cfg: &config::Config,
+    seed: u64,
+    env_name: &str,
+    colony: usize,
+    ticks: u64,
+    pheromone: bool,
+    contact: bool,
+) -> RecruitmentReadout {
+    let genome = cfg.genome.clone();
+    let env = environment::Environment::build(
+        env_name,
+        world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y),
+        cfg.world.width as f32,
+        cfg.world.height as f32,
+    );
+    let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
+    simulator.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
+    simulator.world.nest_radius = cfg.world.nest_radius;
+    simulator.set_colony_size(colony, &genome);
+    simulator.apply_environment(&env);
+    apply_brain(&mut simulator, "integrated");
+    simulator.social_contact = contact;
+    simulator.ablate_contact = !contact;
+    simulator.ablate_trail = !pheromone;
+    for _ in 0..ticks {
+        simulator.step();
+    }
+    let total = |channel| {
+        simulator
+            .world
+            .field
+            .channel_slice(channel)
+            .iter()
+            .map(|&v| v as f64)
+            .sum()
+    };
+    RecruitmentReadout {
+        collected: simulator.collected as f64,
+        trail_total: total(world::Channel::Trail),
+        recruitment_total: total(world::Channel::Recruitment),
+        contact_events: simulator.contact_events as f64,
+    }
 }
 
 fn run_task_protocol(
@@ -1781,6 +1949,255 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         }
         println!("MODEL SCOPE: paired counterfactual sensitivity in this abstract implementation only; it does not establish biological sufficiency, necessity, a wet-lab intervention mapping, or a species-level effect size.");
         println!("EXTERNAL HYPOTHESIS: define a species-, circuit-, and task-specific perturbation separately, then test its direction with appropriate controls.");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--phase7") {
+        let n_seeds: usize = arg_value(args, "--n-seeds", "8")
+            .parse()
+            .unwrap_or(8)
+            .max(1);
+        let out_path = arg_value(args, "--out", "results/phase7_mb_learning.csv");
+        let mut csv = String::from(
+            "assay,seed,condition,approach_weight,avoidance_weight,kc_activity,approach_evidence\n",
+        );
+        let assays = [
+            ("acquisition", "acquisition", 1_u32),
+            ("extinction", "extinction", 1_u32),
+            ("reversal", "reversal", 1_u32),
+            ("blocking_pretrained_a", "blocking", 1_u32),
+            ("blocking_control_b", "blocking_control", 1_u32),
+            ("delay_within_trace", "acquisition", 6_u32),
+            ("delay_beyond_trace", "acquisition", 12_u32),
+            ("valence_avoidance", "avoidance", 1_u32),
+        ];
+        println!("PHASE7_MB_LEARNING paired_seeds={n_seeds}");
+        for (assay, phase, delay) in assays {
+            for replicate in 0..n_seeds {
+                let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+                for (condition, ablate_stdp) in [("intact", false), ("stdp_ablated", true)] {
+                    let r = run_learning_episode(seed, phase, delay, ablate_stdp);
+                    csv.push_str(&format!(
+                        "{assay},{seed},{condition},{:.6},{:.6},{:.6},{:.6}\n",
+                        r.approach_weight, r.avoidance_weight, r.kc_activity, r.approach_evidence
+                    ));
+                }
+            }
+        }
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(&out_path, csv)?;
+        println!("saved: {out_path} (per-trial MB synaptic readouts, including paired compound-cue blocking and its no-pretraining control)");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--phase8") {
+        let ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
+        let n_seeds: usize = arg_value(args, "--n-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let env_name = arg_value(args, "--env", "scarce_far");
+        let out_path = arg_value(args, "--out", "results/phase8_recruitment.csv");
+        let mut csv = String::from(
+            "env,seed,pheromone,contact,collected,trail_total,recruitment_total,contact_events\n",
+        );
+        println!("PHASE8_RECRUITMENT env={env_name} ticks={ticks} colony={colony} paired_seeds={n_seeds}");
+        for replicate in 0..n_seeds {
+            let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+            for (pheromone, contact) in [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let r =
+                    run_recruitment_trial(&cfg, seed, &env_name, colony, ticks, pheromone, contact);
+                csv.push_str(&format!(
+                    "{env_name},{seed},{pheromone},{contact},{:.6},{:.6},{:.6},{:.0}\n",
+                    r.collected, r.trail_total, r.recruitment_total, r.contact_events
+                ));
+            }
+        }
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(&out_path, csv)?;
+        println!("saved: {out_path} (2×2 recruitment matrix with observed contact-event counts)");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--phase9") {
+        let train_ticks: u64 = arg_value(args, "--train-ticks", "3000")
+            .parse()
+            .unwrap_or(3000);
+        let deploy_ticks: u64 = arg_value(args, "--deploy-ticks", "6000")
+            .parse()
+            .unwrap_or(6000);
+        let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
+        let pop: usize = arg_value(args, "--pop", "12").parse().unwrap_or(12);
+        let gens: u32 = arg_value(args, "--gens", "12").parse().unwrap_or(12);
+        let train_seeds: usize = arg_value(args, "--n-seeds", "3")
+            .parse()
+            .unwrap_or(3)
+            .max(1);
+        let deploy_seeds: usize = arg_value(args, "--deploy-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let out_dir = arg_value(args, "--out-dir", "results");
+        std::fs::create_dir_all(&out_dir)?;
+        let envs: Vec<String> = if args.iter().any(|a| a == "--env") {
+            vec![arg_value(args, "--env", "rich_close")]
+        } else {
+            environment::Environment::presets()
+                .into_iter()
+                .map(|(name, _)| name.to_string())
+                .collect()
+        };
+        let mut csv =
+            String::from("env,seed,condition,score,collected,survival,mean_def_frac,trail_total\n");
+        println!("PHASE9_ROBUST_EVOLUTION envs={envs:?} train=(gens={gens},pop={pop},ticks={train_ticks},seeds={train_seeds}) deploy=(ticks={deploy_ticks},seeds={deploy_seeds})");
+        for (env_index, env_name) in envs.iter().enumerate() {
+            let env = environment::Environment::build(
+                env_name,
+                world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y),
+                cfg.world.width as f32,
+                cfg.world.height as f32,
+            );
+            let mut train_cfg = cfg.clone();
+            train_cfg.sim.seed = cfg
+                .sim
+                .seed
+                .wrapping_add((env_index as u64 + 1) * 0x9E37_79B9);
+            let result = evolution::run(
+                &train_cfg,
+                &env,
+                &cfg.genome,
+                pop,
+                gens,
+                train_ticks,
+                colony,
+                train_cfg.sim.seed,
+                train_seeds,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                seasonal,
+                niche,
+                novelty,
+            );
+            let champion_path = format!("{out_dir}/phase9_integrated_{env_name}.toml");
+            std::fs::write(
+                &champion_path,
+                toml::to_string_pretty(&config::Config {
+                    genome: result.best_genome.clone(),
+                    world: cfg.world.clone(),
+                    sim: train_cfg.sim.clone(),
+                })?,
+            )?;
+            for deploy_index in 0..deploy_seeds {
+                let mut eval_cfg = train_cfg.clone();
+                // Disjoint from the contiguous multi-seed training schedule.
+                eval_cfg.sim.seed = train_cfg
+                    .sim
+                    .seed
+                    .wrapping_add(0xD3A1_0000u64.wrapping_add(deploy_index as u64 * 0x1000_0003));
+                for (condition, genome) in
+                    [("default", &cfg.genome), ("champion", &result.best_genome)]
+                {
+                    let fit = evolution::evaluate(
+                        &eval_cfg,
+                        &env,
+                        genome,
+                        deploy_ticks,
+                        colony,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        seasonal,
+                    );
+                    csv.push_str(&format!(
+                        "{env_name},{},{condition},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
+                        eval_cfg.sim.seed,
+                        fit.score,
+                        fit.collected,
+                        fit.survival,
+                        fit.mean_def_frac,
+                        fit.trail_total
+                    ));
+                }
+            }
+            println!(
+                "  {env_name}: train_best={:.3} saved={champion_path}",
+                result.best_fitness.score
+            );
+        }
+        let out_path = format!("{out_dir}/phase9_robust_evolution.csv");
+        std::fs::write(&out_path, csv)?;
+        println!("saved: {out_path} (disjoint deployment-seed champion vs default rows)");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--phase10") {
+        let phase7 = arg_value(args, "--phase7-out", "results/phase7_mb_learning.csv");
+        let phase8 = arg_value(args, "--phase8-out", "results/phase8_recruitment.csv");
+        let phase9 = arg_value(args, "--phase9-out", "results/phase9_robust_evolution.csv");
+        let min_survival: f32 = arg_value(args, "--min-survival", "0.5")
+            .parse()
+            .unwrap_or(0.5);
+        let p7_rows = std::fs::read_to_string(&phase7)
+            .map(|s| s.lines().skip(1).count())
+            .unwrap_or(0);
+        let p8_rows = std::fs::read_to_string(&phase8)
+            .map(|s| s.lines().skip(1).count())
+            .unwrap_or(0);
+        let p9 = std::fs::read_to_string(&phase9).unwrap_or_default();
+        let mut grouped: BTreeMap<String, (f64, usize, f64, usize, f32)> = BTreeMap::new();
+        for row in p9.lines().skip(1) {
+            let cols: Vec<_> = row.split(',').collect();
+            if cols.len() != 8 {
+                continue;
+            }
+            let entry = grouped.entry(cols[0].to_string()).or_default();
+            let score = cols[3].parse::<f64>().unwrap_or(0.0);
+            let survival = cols[5].parse::<f32>().unwrap_or(0.0);
+            if cols[2] == "champion" {
+                entry.0 += score;
+                entry.1 += 1;
+                entry.4 = if entry.1 == 1 {
+                    survival
+                } else {
+                    entry.4.min(survival)
+                };
+            } else if cols[2] == "default" {
+                entry.2 += score;
+                entry.3 += 1;
+            }
+        }
+        let evidence_present = p7_rows > 0 && p8_rows > 0 && !p9.is_empty();
+        println!("PHASE10_RECOMMENDATION evidence phase7_rows={p7_rows} phase8_rows={p8_rows} phase9_envs={}", grouped.len());
+        for (env, (champion_sum, champion_n, default_sum, default_n, min_champion_survival)) in
+            grouped
+        {
+            let champion_mean = champion_sum / champion_n.max(1) as f64;
+            let default_mean = default_sum / default_n.max(1) as f64;
+            let supported = evidence_present
+                && champion_n > 0
+                && default_n > 0
+                && champion_mean > default_mean
+                && min_champion_survival >= min_survival;
+            println!("{env}: recommendation={} champion_score={champion_mean:.3} default_score={default_mean:.3} min_champion_survival={min_champion_survival:.3}", if supported { "CONDITIONAL_USE" } else { "NOT_SUPPORTED" });
+        }
+        println!("SCOPE: a conditional implementation-level deployment preference only; this gate does not establish biological truth, cross-species generality, or a wet-lab intervention result.");
         return Ok(());
     }
 

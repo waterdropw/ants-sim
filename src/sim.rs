@@ -197,6 +197,9 @@ pub struct Simulator {
     pub ablate_contact: bool,
     /// Enables serial antenna-contact events without changing default baseline.
     pub social_contact: bool,
+    /// Cumulative confirmed same-colony carrier-to-peer contact events. This is
+    /// an observed model event count for recruitment assays, not a neural proxy.
+    pub contact_events: u64,
     /// Gates are registered only by the two-bridge scenario.
     pub bridge_gates: Option<[BridgeGate; 2]>,
     /// Cumulative actual ant traffic through the registered bridge gates.
@@ -266,6 +269,7 @@ impl Simulator {
             ablate_cpg_feedback: false,
             ablate_contact: false,
             social_contact: false,
+            contact_events: 0,
             bridge_gates: None,
             bridge_flow: BridgeFlow::default(),
             spatial: SpatialHash::new(width, height),
@@ -563,6 +567,7 @@ impl Simulator {
                 a.contact_signal *= 0.8;
                 a.recruit_signal *= 0.8;
             }
+            self.contact_events += events.len() as u64;
             for (offer, accept, bearing) in events {
                 let gain = self.ants[offer].genome.social_contact_gain;
                 self.ants[offer].contact_signal = 1.0;
@@ -745,6 +750,7 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
+        self.contact_events = 0;
         self.bridge_gates = None;
         self.bridge_flow = BridgeFlow::default();
     }
@@ -832,6 +838,7 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
+        self.contact_events = 0;
         self.bridge_gates = None;
         self.bridge_flow = BridgeFlow::default();
     }
@@ -1014,6 +1021,7 @@ mod tests {
         s.step();
         assert!(s.ants.iter().any(|a| a.recruit_signal > 0.0));
         assert!(s.ants.iter().all(|a| a.contact_signal > 0.0));
+        assert!(s.contact_events > 0, "accepted contacts must be counted");
     }
 
     #[test]
