@@ -8,6 +8,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
+use std::collections::VecDeque;
 
 /// A vertical counting gate placed on one arm of the two-bridge scenario.
 /// A crossing is counted from an ant's actual movement segment, not from
@@ -36,6 +37,21 @@ impl BridgeFlow {
     pub fn short_inbound_fraction(self) -> Option<f32> {
         let total = self.inbound_total();
         (total > 0).then(|| self.short_inbound as f32 / total as f32)
+    }
+}
+
+/// Grid-distance audit of the two bridge arms. These lengths are computed
+/// against the same wall occupancy used by ant motion, with each route forced
+/// to cross its corresponding counting gate exactly once on the outward leg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BridgeRouteLengths {
+    pub short_steps: u32,
+    pub long_steps: u32,
+}
+
+impl BridgeRouteLengths {
+    pub fn detour_ratio(self) -> f32 {
+        self.long_steps as f32 / self.short_steps.max(1) as f32
     }
 }
 
@@ -420,6 +436,23 @@ impl Simulator {
         self.tick += 1;
     }
 
+    /// Audit the shortest traversable grid route for each registered arm.
+    /// This verifies the geometry independently of ant behavior and pheromone
+    /// levels, so a traffic preference cannot be attributed to a mislabeled
+    /// "short" gate.
+    pub fn bridge_route_lengths(&self) -> Option<BridgeRouteLengths> {
+        let [short_gate, long_gate] = self.bridge_gates?;
+        let food = self.world.food.first()?;
+        let short_steps =
+            shortest_path_through_gate(&self.world, self.world.nest, food.pos, short_gate)?;
+        let long_steps =
+            shortest_path_through_gate(&self.world, self.world.nest, food.pos, long_gate)?;
+        Some(BridgeRouteLengths {
+            short_steps,
+            long_steps,
+        })
+    }
+
     /// Record each line-segment crossing through a registered bridge gate.
     /// The strict half-open direction test prevents repeated counts when an ant
     /// lands on a gate line for more than one tick.
@@ -601,18 +634,21 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
-        // These gates sit after the fork and before the long-route detour.
-        // Their y spans cover the actual wall openings, so counts represent
-        // traffic committed to each route rather than a shared approach corridor.
+        // Gates sit downstream of the long-arm obstacle, not immediately
+        // after the fork. A lower-gap ant could otherwise climb back above the
+        // obstacle before crossing the old gate plane, contaminating the
+        // alleged long-arm traffic with a hybrid shortcut. At x=0.67w the
+        // upper gate is reachable only through the short arm, while the lower
+        // gate is reachable only after the bottom detour below wall 2.
         self.bridge_gates = Some([
             BridgeGate {
-                x: w * 0.33,
+                x: w * 0.67,
                 y_min: 0.0,
                 y_max: h * 0.5 - 24.0,
             },
             BridgeGate {
-                x: w * 0.33,
-                y_min: h * 0.5 + 24.0,
+                x: w * 0.67,
+                y_min: h * 0.80,
                 y_max: h,
             },
         ]);
@@ -678,6 +714,66 @@ impl Simulator {
         self.bridge_gates = None;
         self.bridge_flow = BridgeFlow::default();
     }
+}
+
+/// Find the shortest 4-neighbor route from `start` to `goal` while requiring
+/// its left-to-right crossing of the gate plane to lie within `gate`'s span.
+/// The gate is downstream of the fork; requiring this crossing makes each
+/// returned length arm-specific while reusing `World::is_wall` occupancy.
+fn shortest_path_through_gate(
+    world: &World,
+    start: Vec2,
+    goal: Vec2,
+    gate: BridgeGate,
+) -> Option<u32> {
+    let width = world.width;
+    let height = world.height;
+    let start_x = start.x.round().clamp(0.0, (width - 1) as f32) as usize;
+    let start_y = start.y.round().clamp(0.0, (height - 1) as f32) as usize;
+    let goal_x = goal.x.round().clamp(0.0, (width - 1) as f32) as usize;
+    let goal_y = goal.y.round().clamp(0.0, (height - 1) as f32) as usize;
+    let cell_count = width * height;
+    let mut distances = vec![u32::MAX; cell_count * 2];
+    let mut queue = VecDeque::new();
+    let start_state = (start_y * width + start_x) * 2;
+    distances[start_state] = 0;
+    queue.push_back((start_x, start_y, false));
+
+    while let Some((x, y, crossed_gate)) = queue.pop_front() {
+        let state = (y * width + x) * 2 + usize::from(crossed_gate);
+        let distance = distances[state];
+        if crossed_gate && x == goal_x && y == goal_y {
+            return Some(distance);
+        }
+        for (dx, dy) in [(1_isize, 0_isize), (-1, 0), (0, 1), (0, -1)] {
+            let nx = x as isize + dx;
+            let ny = y as isize + dy;
+            if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
+                continue;
+            }
+            let nx = nx as usize;
+            let ny = ny as usize;
+            if world.is_wall(nx as f32, ny as f32) {
+                continue;
+            }
+            let crosses_plane = (x as f32 <= gate.x && nx as f32 > gate.x)
+                || (x as f32 > gate.x && nx as f32 <= gate.x);
+            let in_gate_span = y as f32 >= gate.y_min && y as f32 <= gate.y_max;
+            // Any crossing of the gate plane must use this arm's gate. This
+            // prevents a route from selecting the other fork and merely
+            // wandering across the plane later to satisfy the state flag.
+            if crosses_plane && !in_gate_span {
+                continue;
+            }
+            let crossed_gate = crossed_gate || crosses_plane;
+            let next_state = (ny * width + nx) * 2 + usize::from(crossed_gate);
+            if distances[next_state] == u32::MAX {
+                distances[next_state] = distance + 1;
+                queue.push_back((nx, ny, crossed_gate));
+            }
+        }
+    }
+    None
 }
 
 fn crosses_gate(before: Vec2, after: Vec2, gate: BridgeGate) -> bool {
@@ -777,6 +873,23 @@ mod tests {
             Vec2::new(9.0, 4.0),
             gate
         ));
+    }
+
+    #[test]
+    fn two_bridge_geometry_audit_confirms_short_arm_is_shorter() {
+        let g = Genome::default();
+        let mut simulator = Simulator::new(128, 128, 4, &g);
+        simulator.scenario_two_bridge();
+        let lengths = simulator
+            .bridge_route_lengths()
+            .expect("both bridge arms should have a traversable route");
+        assert!(
+            lengths.short_steps < lengths.long_steps,
+            "short arm {} must be shorter than long arm {}",
+            lengths.short_steps,
+            lengths.long_steps
+        );
+        assert!(lengths.detour_ratio() > 1.0);
     }
 
     #[test]

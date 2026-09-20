@@ -232,6 +232,27 @@ fn build_sim(args: &[String], cfg: &config::Config) -> sim::Simulator {
     sim
 }
 
+/// Run one two-bridge traffic assay with the supplied genome and return the
+/// cumulative actual gate crossings. The helper deliberately does not write a
+/// CSV so parameter sweeps cannot overwrite the primary `--bridge` artifact.
+fn run_bridge_trial(
+    cfg: &config::Config,
+    genome: &genome::Genome,
+    seed: u64,
+    colony: usize,
+    ticks: u64,
+    ablate_trail: bool,
+) -> sim::BridgeFlow {
+    let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, genome);
+    simulator.scenario_two_bridge();
+    simulator.set_colony_size(colony, genome);
+    simulator.ablate_trail = ablate_trail;
+    for _ in 0..ticks {
+        simulator.step();
+    }
+    simulator.bridge_flow
+}
+
 /// Deterministic fingerprint of sim state (collected, visits, Trail field sum).
 fn fingerprint(sim: &sim::Simulator) -> String {
     let trail_sum: f64 = sim
@@ -746,14 +767,208 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if args.iter().any(|a| a == "--bridge-control") {
+        let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
+        let control_ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let n_seeds: usize = arg_value(args, "--n-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let geometry = {
+            let mut simulator =
+                sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
+            simulator.scenario_two_bridge();
+            simulator.bridge_route_lengths()
+        };
+        let mut baseline = Moments::default();
+        let mut trail_off = Moments::default();
+        let mut baseline_inbound_total = Moments::default();
+        let mut trail_off_inbound_total = Moments::default();
+        let mut paired_fraction_delta_pct = Moments::default();
+        let mut paired_inbound_total_delta_pct = Moments::default();
+        let mut raw_csv = String::from(
+            "seed,condition,short_inbound,long_inbound,inbound_total,short_inbound_fraction\n",
+        );
+        println!(
+            "BRIDGE_CONTROL paired Trail counterfactual colony={colony} ticks={control_ticks} n_seeds={n_seeds}"
+        );
+        match geometry {
+            Some(lengths) => println!(
+                "  geometry: short={} grid steps long={} grid steps detour_ratio={:.2}x",
+                lengths.short_steps,
+                lengths.long_steps,
+                lengths.detour_ratio()
+            ),
+            None => println!("  geometry: UNRESOLVED (no traversable arm-specific route)"),
+        }
+        for replicate in 0..n_seeds {
+            let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+            let with_trail =
+                run_bridge_trial(&cfg, &cfg.genome, seed, colony, control_ticks, false);
+            let without_trail =
+                run_bridge_trial(&cfg, &cfg.genome, seed, colony, control_ticks, true);
+            for (condition, flow) in [("trail_on", with_trail), ("trail_off", without_trail)] {
+                let fraction = flow
+                    .short_inbound_fraction()
+                    .map(|value| format!("{value:.6}"))
+                    .unwrap_or_else(|| "NA".to_string());
+                raw_csv.push_str(&format!(
+                    "{seed},{condition},{},{},{},{}\n",
+                    flow.short_inbound,
+                    flow.long_inbound,
+                    flow.inbound_total(),
+                    fraction
+                ));
+            }
+            if let Some(value) = with_trail.short_inbound_fraction() {
+                baseline.push(value as f64);
+            }
+            if let Some(value) = without_trail.short_inbound_fraction() {
+                trail_off.push(value as f64);
+            }
+            baseline_inbound_total.push(with_trail.inbound_total() as f64);
+            trail_off_inbound_total.push(without_trail.inbound_total() as f64);
+            if let (Some(on), Some(off)) = (
+                with_trail.short_inbound_fraction(),
+                without_trail.short_inbound_fraction(),
+            ) {
+                paired_fraction_delta_pct
+                    .push(100.0 * (off as f64 - on as f64) / on.max(f32::EPSILON) as f64);
+            }
+            paired_inbound_total_delta_pct.push(
+                100.0 * (without_trail.inbound_total() as f64 - with_trail.inbound_total() as f64)
+                    / with_trail.inbound_total().max(1) as f64,
+            );
+        }
+        let display = |moments: Moments| {
+            if moments.display_count() > 0 {
+                format!(
+                    "{:.3}±{} (n={})",
+                    moments.mean,
+                    moments.display_sd(),
+                    moments.n
+                )
+            } else {
+                "NA (n=0)".to_string()
+            }
+        };
+        println!("  Trail on  short_inbound_fraction={}", display(baseline));
+        println!("  Trail off short_inbound_fraction={}", display(trail_off));
+        println!(
+            "  Trail on/off inbound_total={}/{}",
+            display(baseline_inbound_total),
+            display(trail_off_inbound_total)
+        );
+        println!(
+            "  paired Trail-off short-fraction Δ%={}",
+            display(paired_fraction_delta_pct)
+        );
+        println!(
+            "  paired Trail-off inbound-total Δ%={}",
+            display(paired_inbound_total_delta_pct)
+        );
+        let _ = std::fs::create_dir_all("results");
+        let _ = std::fs::write("results/bridge_control.csv", raw_csv);
+        println!("saved: results/bridge_control.csv (per-seed paired actual gate traffic)");
+        println!("scope: model-internal Trail sensitivity only; this implementation switch is not a molecular or species-level pheromone intervention.");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--bridge-sweep") {
+        let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
+        let sweep_ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let n_seeds: usize = arg_value(args, "--n-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let strengths = [0.5_f32, 1.5, 3.0, 4.5, 6.0];
+        let geometry = {
+            let mut simulator =
+                sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
+            simulator.scenario_two_bridge();
+            simulator.bridge_route_lengths()
+        };
+        let mut csv = String::from(
+            "follow_strength,seed,short_inbound,long_inbound,inbound_total,short_inbound_fraction\n",
+        );
+        println!(
+            "BRIDGE_SWEEP actual gate traffic colony={colony} ticks={sweep_ticks} n_seeds={n_seeds}"
+        );
+        match geometry {
+            Some(lengths) => println!(
+                "  geometry: short={} grid steps long={} grid steps detour_ratio={:.2}x",
+                lengths.short_steps,
+                lengths.long_steps,
+                lengths.detour_ratio()
+            ),
+            None => println!("  geometry: UNRESOLVED (no traversable arm-specific route)"),
+        }
+        println!(
+            "{:<16} {:>15} {:>12} {:>12}",
+            "follow_strength", "fraction mean±sd", "valid seeds", "inbound mean"
+        );
+        for strength in strengths {
+            let mut fractions = Moments::default();
+            let mut inbound_total = Moments::default();
+            for replicate in 0..n_seeds {
+                let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+                let genome = genome::Genome {
+                    follow_strength: strength,
+                    ..cfg.genome.clone()
+                };
+                let flow = run_bridge_trial(&cfg, &genome, seed, colony, sweep_ticks, false);
+                let fraction_cell = flow
+                    .short_inbound_fraction()
+                    .map(|fraction| {
+                        fractions.push(fraction as f64);
+                        format!("{fraction:.6}")
+                    })
+                    .unwrap_or_else(|| "NA".to_string());
+                inbound_total.push(flow.inbound_total() as f64);
+                csv.push_str(&format!(
+                    "{strength:.3},{seed},{},{},{},{}\n",
+                    flow.short_inbound,
+                    flow.long_inbound,
+                    flow.inbound_total(),
+                    fraction_cell
+                ));
+            }
+            let fraction = if fractions.display_count() > 0 {
+                format!("{:.3}±{}", fractions.mean, fractions.display_sd())
+            } else {
+                "NA (n=0)".to_string()
+            };
+            println!(
+                "{strength:<16.1} {fraction:>15} {:>12} {:>12.1}",
+                fractions.display_count(),
+                inbound_total.mean
+            );
+        }
+        let _ = std::fs::create_dir_all("results");
+        let _ = std::fs::write("results/bridge_sweep.csv", csv);
+        println!("saved: results/bridge_sweep.csv (per-seed actual gate-crossing traffic)");
+        println!("scope: sensitivity analysis for this abstract model; it does not calibrate a species-level short-path preference.");
+        return Ok(());
+    }
+
     if args.iter().any(|a| a == "--bridge") {
         let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
         let seed = cfg.sim.seed;
         let genome = cfg.genome.clone();
         let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
         simulator.scenario_two_bridge();
+        let geometry = simulator.bridge_route_lengths();
         simulator.set_colony_size(colony, &genome);
         println!("BRIDGE traffic-flow protocol colony={colony} seed={seed} ticks={ticks}");
+        match geometry {
+            Some(lengths) => println!(
+                "  geometry: short={} grid steps long={} grid steps detour_ratio={:.2}x",
+                lengths.short_steps,
+                lengths.long_steps,
+                lengths.detour_ratio()
+            ),
+            None => println!("  geometry: UNRESOLVED (no traversable arm-specific route)"),
+        }
         let mut csv = String::from("tick,short_outbound,long_outbound,short_inbound,long_inbound,short_inbound_fraction,collected\n");
         let sample_every = (ticks / 6).max(1);
         for tick in 0..ticks {
