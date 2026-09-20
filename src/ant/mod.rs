@@ -100,6 +100,9 @@ pub struct Ant {
     /// stdp: skip lifetime synaptic plasticity.
     pub ablate_vision: bool,
     pub ablate_stdp: bool,
+    /// Blocks experience-driven octopamine accumulation while retaining its
+    /// state variable for comparable telemetry.
+    pub ablate_octopamine: bool,
     /// Early-circuit / navigation ablations are propagated by Simulator.
     pub ablate_al_inhibition: bool,
     pub ablate_pn_multichannel: bool,
@@ -107,6 +110,7 @@ pub struct Ant {
     pub ablate_orn: bool,
     pub ablate_compass: bool,
     pub ablate_cx_motor: bool,
+    pub ablate_cpg_feedback: bool,
     pub orn_adaptation: [f32; crate::ant::sensors::CHEM_CHANNELS],
     /// Social observations are populated only by the serial contact flush.
     pub contact_signal: f32,
@@ -191,12 +195,14 @@ impl Ant {
             octopamine: 0.0,
             ablate_vision: false,
             ablate_stdp: false,
+            ablate_octopamine: false,
             ablate_al_inhibition: false,
             ablate_pn_multichannel: false,
             ablate_lh_reflex: false,
             ablate_orn: false,
             ablate_compass: false,
             ablate_cx_motor: false,
+            ablate_cpg_feedback: false,
             orn_adaptation: [0.0; crate::ant::sensors::CHEM_CHANNELS],
             contact_signal: 0.0,
             recruit_signal: 0.0,
@@ -307,7 +313,9 @@ impl Ant {
             .clamp(0.0, 1.0);
         self.octopamine *= 0.99;
         let foraging = matches!(self.state, State::Explore | State::FollowTrail) && !self.carrying;
-        if foraging {
+        if self.ablate_octopamine {
+            self.octopamine = 0.0;
+        } else if foraging {
             self.octopamine =
                 (self.octopamine + crate::genome::OCT_FORAGE_GAIN).min(crate::genome::OCT_MAX);
         } else if self.carrying || self.state == State::Nurse {
@@ -456,8 +464,12 @@ impl Ant {
         // T14: CPG gait — octopamine arousal raises gait frequency, which raises
         // walking speed (neuromodulator → locomotion, ties into T11). The leg
         // phases advance at `omega` (observable gait), speed scales with it.
-        let omega =
-            self.genome.cpg_freq * (1.0 + crate::genome::CPG_AROUSAL_GAIN * self.octopamine);
+        let arousal = if self.ablate_cpg_feedback {
+            0.0
+        } else {
+            self.octopamine
+        };
+        let omega = self.genome.cpg_freq * (1.0 + crate::genome::CPG_AROUSAL_GAIN * arousal);
         let speed = self.genome.max_speed
             * (omega / self.genome.cpg_freq)
             * self.last_command.speed_drive.max(0.0)
@@ -597,6 +609,32 @@ mod tests {
         assert!(ant.motor_feedback.actual_distance.is_finite());
         assert!(ant.motor_feedback.actual_distance >= 0.0);
         assert!(ant.last_command.speed_drive >= 0.0);
+    }
+
+    #[test]
+    fn octopamine_ablation_blocks_foraging_arousal() {
+        let mut ant = Ant::new(Vec2::new(12.0, 12.0), 0.0, &Genome::default(), 7);
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 4.0);
+        ant.ablate_octopamine = true;
+        ant.update(&world, false, false, false, false, false);
+        assert_eq!(ant.octopamine, 0.0);
+    }
+
+    #[test]
+    fn cpg_feedback_ablation_preserves_base_gait_but_removes_arousal_speedup() {
+        let mut aroused = Ant::new(Vec2::new(12.0, 12.0), 0.0, &Genome::default(), 7);
+        let mut ablated = aroused.clone();
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 4.0);
+        aroused.octopamine = 1.0;
+        ablated.octopamine = 1.0;
+        ablated.ablate_cpg_feedback = true;
+        aroused.update(&world, false, false, false, false, false);
+        ablated.update(&world, false, false, false, false, false);
+        assert!(
+            aroused.motor_feedback.actual_distance > ablated.motor_feedback.actual_distance,
+            "arousal must speed locomotion unless CPG feedback is ablated"
+        );
+        assert!(ablated.motor_feedback.actual_distance > 0.0);
     }
 
     #[test]

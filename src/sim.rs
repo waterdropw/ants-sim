@@ -191,6 +191,9 @@ pub struct Simulator {
     pub ablate_orn: bool,
     pub ablate_compass: bool,
     pub ablate_cx_motor: bool,
+    /// Disconnect octopamine from the CPG frequency/speed feedback while
+    /// retaining the deterministic tripod oscillator itself.
+    pub ablate_cpg_feedback: bool,
     pub ablate_contact: bool,
     /// Enables serial antenna-contact events without changing default baseline.
     pub social_contact: bool,
@@ -260,6 +263,7 @@ impl Simulator {
             ablate_orn: false,
             ablate_compass: false,
             ablate_cx_motor: false,
+            ablate_cpg_feedback: false,
             ablate_contact: false,
             social_contact: false,
             bridge_gates: None,
@@ -304,12 +308,14 @@ impl Simulator {
         for a in self.ants.iter_mut() {
             a.ablate_vision = self.ablate_vision;
             a.ablate_stdp = self.ablate_stdp;
+            a.ablate_octopamine = self.ablate_octopamine;
             a.ablate_al_inhibition = self.ablate_al_inhibition;
             a.ablate_pn_multichannel = self.ablate_pn_multichannel;
             a.ablate_lh_reflex = self.ablate_lh_reflex;
             a.ablate_orn = self.ablate_orn;
             a.ablate_compass = self.ablate_compass;
             a.ablate_cx_motor = self.ablate_cx_motor;
+            a.ablate_cpg_feedback = self.ablate_cpg_feedback;
         }
         step_ants(
             &mut self.ants,

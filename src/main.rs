@@ -98,6 +98,7 @@ fn run_phase6_trial(
     colony: usize,
     ticks: u64,
     mechanism: Option<&str>,
+    social_contact: bool,
 ) -> Phase6Readout {
     let genome = cfg.genome.clone();
     let env = environment::Environment::build(
@@ -112,6 +113,7 @@ fn run_phase6_trial(
     simulator.set_colony_size(colony, &genome);
     simulator.apply_environment(&env);
     apply_brain(&mut simulator, "integrated");
+    simulator.social_contact = social_contact;
     if let Some(mechanism) = mechanism {
         configure_ablation(&mut simulator, mechanism, true);
     }
@@ -175,6 +177,7 @@ fn configure_ablation(sim: &mut sim::Simulator, mechanism: &str, enabled: bool) 
     sim.ablate_orn = enabled && mechanism == "orn";
     sim.ablate_compass = enabled && mechanism == "compass";
     sim.ablate_cx_motor = enabled && mechanism == "cx_motor";
+    sim.ablate_cpg_feedback = enabled && mechanism == "cpg_feedback";
     sim.ablate_contact = enabled && mechanism == "contact";
 }
 
@@ -1580,6 +1583,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             "compass",
             "cx_motor",
             "contact",
+            "cpg_feedback",
         ];
         if !known.contains(&mech.as_str()) {
             anyhow::bail!(
@@ -1620,6 +1624,10 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             simulator.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
             simulator.world.nest_radius = cfg.world.nest_radius;
             apply_brain(&mut simulator, &brain);
+            // Contact has no effect unless the serial contact pathway is active.
+            // Enable it for both members of this paired comparison, then let the
+            // ablation selectively suppress event delivery.
+            simulator.social_contact = mech == "contact";
             configure_ablation(&mut simulator, &mech, ablated);
             if mech == "punish" {
                 simulator.apply_environment(&env);
@@ -1802,6 +1810,11 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             "lh_reflex",
             "compass",
             "cx_motor",
+            "stdp",
+            "reward",
+            "octopamine",
+            "cpg_feedback",
+            "contact",
         ];
         let mechanism_filter = arg_value(args, "--mechanism", "");
         let selected: Vec<&str> = if mechanism_filter.is_empty() {
@@ -1827,7 +1840,6 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         for env in &envs {
             for replicate in 0..n_seeds {
                 let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
-                let baseline = run_phase6_trial(&cfg, seed, env, colony, ticks, None);
                 let write_row = |condition: &str,
                                  mechanism: &str,
                                  readout: Phase6Readout,
@@ -1845,9 +1857,23 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                         readout.mean_rpe,
                     ));
                 };
-                write_row("baseline", "none", baseline, &mut csv);
                 for mechanism in &selected {
-                    let ablated = run_phase6_trial(&cfg, seed, env, colony, ticks, Some(mechanism));
+                    // Contact is enabled in both paired conditions, then disabled
+                    // only by its ablation. Other mechanisms retain the default
+                    // no-contact baseline so their comparisons stay isolated.
+                    let uses_contact = *mechanism == "contact";
+                    let baseline =
+                        run_phase6_trial(&cfg, seed, env, colony, ticks, None, uses_contact);
+                    let ablated = run_phase6_trial(
+                        &cfg,
+                        seed,
+                        env,
+                        colony,
+                        ticks,
+                        Some(mechanism),
+                        uses_contact,
+                    );
+                    write_row("baseline", mechanism, baseline, &mut csv);
                     write_row("ablated", mechanism, ablated, &mut csv);
                     let entry = summaries
                         .entry((env.clone(), (*mechanism).to_string()))
@@ -2293,8 +2319,14 @@ draw();
         let ticks: u64 = arg_value(args, "--ticks", "1000").parse().unwrap_or(1000);
         let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
         let out_dir = arg_value(args, "--out-dir", "results");
+        let champion_prefix = arg_value(args, "--champion-prefix", "evolved_");
+        let out_stem = arg_value(args, "--out-stem", "zoo");
+        let n_seeds: usize = arg_value(args, "--n-seeds", "1")
+            .parse()
+            .unwrap_or(1)
+            .max(1);
         let nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
-        println!("ZOO ticks={ticks} colony={colony}  (champion vs default in native env)");
+        println!("ZOO ticks={ticks} colony={colony} n_seeds={n_seeds} champion_prefix={champion_prefix}  (champion vs default in native env)");
         println!(
             "{:<12} {:>10} {:>10} {:>9} {:>8} {:>8} {:>8}",
             "env", "default_s", "champ_s", "coll", "eff/tick", "deffrac", "fs"
@@ -2309,12 +2341,13 @@ draw();
                 cfg.world.width as f32,
                 cfg.world.height as f32,
             );
-            let default_fit = evolution::evaluate(
+            let default_fit = evolution::evaluate_multi(
                 &cfg,
                 &env,
                 &cfg.genome,
                 ticks,
                 colony,
+                n_seeds,
                 brain_ann,
                 brain_cppn,
                 brain_snn,
@@ -2323,14 +2356,16 @@ draw();
                 brain_integrated,
                 seasonal,
             );
-            let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{name}.toml"))
-                .unwrap_or_else(|_| cfg.clone());
-            let champ_fit = evolution::evaluate(
+            let champ_cfg =
+                config::Config::load(&format!("{out_dir}/{champion_prefix}{name}.toml"))
+                    .unwrap_or_else(|_| cfg.clone());
+            let champ_fit = evolution::evaluate_multi(
                 &champ_cfg,
                 &env,
                 &champ_cfg.genome,
                 ticks,
                 colony,
+                n_seeds,
                 brain_ann,
                 brain_cppn,
                 brain_snn,
@@ -2360,8 +2395,9 @@ draw();
                 champ_cfg.genome.follow_strength,
             ));
         }
-        let _ = std::fs::write(format!("{out_dir}/zoo.csv"), csv);
-        println!("  saved: {out_dir}/zoo.csv");
+        let _ = std::fs::create_dir_all(&out_dir);
+        let _ = std::fs::write(format!("{out_dir}/{out_stem}.csv"), csv);
+        println!("  saved: {out_dir}/{out_stem}.csv");
         return Ok(());
     }
 
@@ -2369,6 +2405,12 @@ draw();
         let ticks: u64 = arg_value(args, "--ticks", "800").parse().unwrap_or(800);
         let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
         let out_dir = arg_value(args, "--out-dir", "results");
+        let champion_prefix = arg_value(args, "--champion-prefix", "evolved_");
+        let out_stem = arg_value(args, "--out-stem", "transfer");
+        let n_seeds: usize = arg_value(args, "--n-seeds", "1")
+            .parse()
+            .unwrap_or(1)
+            .max(1);
         let nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
         let presets = environment::Environment::presets();
         // header
@@ -2384,8 +2426,9 @@ draw();
         csv.push('\n');
         // load each champion, evaluate in every env
         for (origin, _) in &presets {
-            let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{origin}.toml"))
-                .unwrap_or_else(|_| cfg.clone());
+            let champ_cfg =
+                config::Config::load(&format!("{out_dir}/{champion_prefix}{origin}.toml"))
+                    .unwrap_or_else(|_| cfg.clone());
             print!("{:<14}", origin);
             csv.push_str(origin);
             for (target, _) in &presets {
@@ -2395,12 +2438,13 @@ draw();
                     cfg.world.width as f32,
                     cfg.world.height as f32,
                 );
-                let fit = evolution::evaluate(
+                let fit = evolution::evaluate_multi(
                     &champ_cfg,
                     &env,
                     &champ_cfg.genome,
                     ticks,
                     colony,
+                    n_seeds,
                     brain_ann,
                     brain_cppn,
                     brain_snn,
@@ -2415,9 +2459,10 @@ draw();
             println!();
             csv.push('\n');
         }
-        let _ = std::fs::write(format!("{out_dir}/transfer.csv"), csv);
+        let _ = std::fs::create_dir_all(&out_dir);
+        let _ = std::fs::write(format!("{out_dir}/{out_stem}.csv"), csv);
         println!(
-            "  saved: {out_dir}/transfer.csv  (diagonal = native env; off-diagonal = transfer)"
+            "  saved: {out_dir}/{out_stem}.csv  (diagonal = native env; off-diagonal = transfer; n_seeds={n_seeds}; champion_prefix={champion_prefix})"
         );
         return Ok(());
     }
