@@ -20,6 +20,7 @@ mod world;
 
 use eframe::egui;
 use rand::{Rng, SeedableRng};
+use std::collections::BTreeMap;
 use std::io::Write;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -73,6 +74,82 @@ struct AblationReadout {
     max_alive: f64,
     final_alive: f64,
     weight_drift: f64,
+}
+
+/// Per-seed behavioral and circuit readout for the Phase 6 integration matrix.
+/// This is deliberately model-internal telemetry, not a biological fit.
+#[derive(Clone, Copy, Debug, Default)]
+struct Phase6Readout {
+    collected: f64,
+    final_alive: f64,
+    trail_total: f64,
+    mean_turn_drive: f64,
+    mean_lh_turn: f64,
+    mean_mb_approach: f64,
+    mean_mb_avoidance: f64,
+    mean_cx_turn: f64,
+    mean_rpe: f64,
+}
+
+fn run_phase6_trial(
+    cfg: &config::Config,
+    seed: u64,
+    env_name: &str,
+    colony: usize,
+    ticks: u64,
+    mechanism: Option<&str>,
+) -> Phase6Readout {
+    let genome = cfg.genome.clone();
+    let env = environment::Environment::build(
+        env_name,
+        world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y),
+        cfg.world.width as f32,
+        cfg.world.height as f32,
+    );
+    let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
+    simulator.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
+    simulator.world.nest_radius = cfg.world.nest_radius;
+    simulator.set_colony_size(colony, &genome);
+    simulator.apply_environment(&env);
+    apply_brain(&mut simulator, "integrated");
+    if let Some(mechanism) = mechanism {
+        configure_ablation(&mut simulator, mechanism, true);
+    }
+
+    let mut telemetry = sim::BrainTelemetry::default();
+    let mut samples = 0_u64;
+    for tick in 0..ticks {
+        simulator.step();
+        if tick >= ticks / 2 && (tick + 1).is_multiple_of(50) {
+            let sample = simulator.brain_telemetry();
+            telemetry.mean_turn_drive += sample.mean_turn_drive;
+            telemetry.mean_lh_turn += sample.mean_lh_turn;
+            telemetry.mean_mb_approach += sample.mean_mb_approach;
+            telemetry.mean_mb_avoidance += sample.mean_mb_avoidance;
+            telemetry.mean_cx_turn += sample.mean_cx_turn;
+            telemetry.mean_rpe += sample.mean_rpe;
+            samples += 1;
+        }
+    }
+    let scale = 1.0 / samples.max(1) as f32;
+    let trail_total = simulator
+        .world
+        .field
+        .channel_slice(world::Channel::Trail)
+        .iter()
+        .map(|&value| value as f64)
+        .sum();
+    Phase6Readout {
+        collected: simulator.collected as f64,
+        final_alive: simulator.ants.len() as f64,
+        trail_total,
+        mean_turn_drive: (telemetry.mean_turn_drive * scale) as f64,
+        mean_lh_turn: (telemetry.mean_lh_turn * scale) as f64,
+        mean_mb_approach: (telemetry.mean_mb_approach * scale) as f64,
+        mean_mb_avoidance: (telemetry.mean_mb_avoidance * scale) as f64,
+        mean_cx_turn: (telemetry.mean_cx_turn * scale) as f64,
+        mean_rpe: (telemetry.mean_rpe * scale) as f64,
+    }
 }
 
 fn apply_brain(sim: &mut sim::Simulator, brain: &str) {
@@ -1696,6 +1773,122 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         }
         println!("MODEL SCOPE: paired counterfactual sensitivity in this abstract implementation only; it does not establish biological sufficiency, necessity, a wet-lab intervention mapping, or a species-level effect size.");
         println!("EXTERNAL HYPOTHESIS: define a species-, circuit-, and task-specific perturbation separately, then test its direction with appropriate controls.");
+        return Ok(());
+    }
+
+    if args.iter().any(|a| a == "--phase6") {
+        // Integration evidence matrix: each ablation is paired with an intact
+        // integrated-brain run at the same seed. It reports raw rows plus
+        // summary statistics; it intentionally does not claim animal validity.
+        let ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
+        let n_seeds: usize = arg_value(args, "--n-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let out_path = arg_value(args, "--out", "results/phase6_integrated.csv");
+        let envs: Vec<String> = if args.iter().any(|arg| arg == "--env") {
+            vec![arg_value(args, "--env", "rich_close")]
+        } else {
+            ["rich_close", "scarce_far", "predator", "patchy", "maze"]
+                .iter()
+                .map(|env| env.to_string())
+                .collect()
+        };
+        let mechanisms = [
+            "orn",
+            "al_inhibition",
+            "pn_multichannel",
+            "lh_reflex",
+            "compass",
+            "cx_motor",
+        ];
+        let mechanism_filter = arg_value(args, "--mechanism", "");
+        let selected: Vec<&str> = if mechanism_filter.is_empty() {
+            mechanisms.to_vec()
+        } else if mechanisms.contains(&mechanism_filter.as_str()) {
+            vec![mechanism_filter.as_str()]
+        } else {
+            anyhow::bail!(
+                "unknown --mechanism '{}'; use {}",
+                mechanism_filter,
+                mechanisms.join("|")
+            );
+        };
+        let mut csv = String::from(
+            "env,seed,condition,mechanism,collected,final_alive,trail_total,mean_turn_drive,mean_lh_turn,mean_mb_approach,mean_mb_avoidance,mean_cx_turn,mean_rpe\n",
+        );
+        let mut summaries: BTreeMap<(String, String), (Moments, Moments, Moments)> =
+            BTreeMap::new();
+        println!(
+            "PHASE6_INTEGRATION brain=integrated envs={:?} ticks={} colony={} paired_seeds={}",
+            envs, ticks, colony, n_seeds
+        );
+        for env in &envs {
+            for replicate in 0..n_seeds {
+                let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+                let baseline = run_phase6_trial(&cfg, seed, env, colony, ticks, None);
+                let write_row = |condition: &str,
+                                 mechanism: &str,
+                                 readout: Phase6Readout,
+                                 csv: &mut String| {
+                    csv.push_str(&format!(
+                        "{env},{seed},{condition},{mechanism},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
+                        readout.collected,
+                        readout.final_alive,
+                        readout.trail_total,
+                        readout.mean_turn_drive,
+                        readout.mean_lh_turn,
+                        readout.mean_mb_approach,
+                        readout.mean_mb_avoidance,
+                        readout.mean_cx_turn,
+                        readout.mean_rpe,
+                    ));
+                };
+                write_row("baseline", "none", baseline, &mut csv);
+                for mechanism in &selected {
+                    let ablated = run_phase6_trial(&cfg, seed, env, colony, ticks, Some(mechanism));
+                    write_row("ablated", mechanism, ablated, &mut csv);
+                    let entry = summaries
+                        .entry((env.clone(), (*mechanism).to_string()))
+                        .or_default();
+                    entry.0.push(baseline.collected);
+                    entry.1.push(ablated.collected);
+                    if baseline.collected.abs() > f64::EPSILON {
+                        entry.2.push(
+                            100.0 * (ablated.collected - baseline.collected) / baseline.collected,
+                        );
+                    }
+                }
+            }
+        }
+        if let Some(parent) = std::path::Path::new(&out_path).parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(&out_path, csv)?;
+        println!(
+            "{:<12} {:<18} {:>17} {:>17} {:>18}",
+            "env", "mechanism", "baseline mean±sd", "ablated mean±sd", "paired Δ% mean±sd"
+        );
+        for ((env, mechanism), (baseline, ablated, paired_delta)) in summaries {
+            let paired_delta = if paired_delta.display_count() > 0 {
+                format!("{:+.3}±{}", paired_delta.mean, paired_delta.display_sd())
+            } else {
+                "NA (n=0)".to_string()
+            };
+            println!(
+                "{env:<12} {mechanism:<18} {:>8.3}±{:<6} {:>8.3}±{:<6} {:>18}",
+                baseline.mean,
+                baseline.display_sd(),
+                ablated.mean,
+                ablated.display_sd(),
+                paired_delta,
+            );
+        }
+        println!("saved: {out_path} (raw per-seed paired model-internal data)");
+        println!("SCOPE: this protocol measures implementation sensitivity and integrated-circuit behavior only; it is not a species-level calibration or biological necessity claim.");
         return Ok(());
     }
 

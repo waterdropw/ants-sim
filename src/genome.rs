@@ -1268,9 +1268,9 @@ pub fn mb_seed() -> Vec<f32> {
     let off_w_out = off_b_kc + kc_n;
 
     // --- W_al: glomerulus ← input assignments (foraging-relevant signals) ---
-    // input layout (assembled in mb_decide): 0 trail_val, 1 home_val, 2 alarm_val,
+    // input layout (assembled in mb_decide): 0-2 PN single-channel values,
     // 3 out_steer, 4 ts, 5 ns, 6 as_, 7 noise, 8-11 coss, 12 c, 13 energy,
-    // 14 alarm_val, 15 in_steer, 16-19 vision/prox.
+    // 14 PN mixed opponent contrast, 15 in_steer, 16-19 vision/prox.
     let set_al = |w: &mut [f32], gl: usize, inp: usize, wt: f32| {
         w[gl * al_in + inp] = wt;
     };
@@ -1281,9 +1281,12 @@ pub fn mb_seed() -> Vec<f32> {
     set_al(&mut w, 3, 12, 1.0); // glom3 ← c (carrying detector)
     set_al(&mut w, 4, 2, 1.0); // glom4 ← alarm_val (concentration)
     set_al(&mut w, 5, 6, 1.0); // glom5 ← as_ (alarm steer, signed)
-    set_al(&mut w, 6, 1, 1.0); // glom6 ← home_val
+    set_al(&mut w, 6, 1, 1.0); // glom6 ← home PN
     set_al(&mut w, 7, 7, 1.0); // glom7 ← noise (exploration drive)
-                               // T10 multi-modal: vision + proximity converge onto glomeruli 8-11.
+                               // Mixed PN projection provides a distinct, ablatable recruitment/home
+                               // opponent contrast to the learned MB pathway.
+    set_al(&mut w, 11, 14, 1.0);
+    // T10 multi-modal: vision + proximity converge onto glomeruli 8-11.
     set_al(&mut w, 8, 16, 1.0);
     set_al(&mut w, 8, 8, 1.0); // glom8 ← v_sin + trail_cos
     set_al(&mut w, 9, 17, 1.0);

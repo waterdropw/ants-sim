@@ -781,8 +781,8 @@ pub fn mb_decide_with_code(ant: &mut Ant, s: &Sensing, code: &SensoryCode, world
         nc, // 4 cos signals
         c,
         ant.energy,
-        code.pn_mixed[0],
-        in_steer, // state plus mixed-PN evidence
+        code.pn_mixed[1] - code.pn_mixed[2],
+        in_steer, // state plus mixed PN opponent evidence
         v_sin,
         v_cos,
         v_prox,
