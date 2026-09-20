@@ -64,6 +64,50 @@ pub struct TaskFractions {
     pub brood_care: f32,
 }
 
+/// Aggregate, fixed-size brain readout. It intentionally contains summaries
+/// rather than per-ant activity arrays, so it can be sampled in long assays.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BrainTelemetry {
+    pub ants: usize,
+    pub mean_turn_drive: f32,
+    pub mean_lh_turn: f32,
+    pub mean_mb_approach: f32,
+    pub mean_mb_avoidance: f32,
+    pub mean_cx_turn: f32,
+    pub mean_rpe: f32,
+    pub mean_eligibility: f32,
+}
+
+impl BrainTelemetry {
+    pub fn from_ants(ants: &[Ant]) -> Self {
+        let mut telemetry = Self {
+            ants: ants.len(),
+            ..Self::default()
+        };
+        if ants.is_empty() {
+            return telemetry;
+        }
+        for ant in ants {
+            telemetry.mean_turn_drive += ant.last_command.turn_drive;
+            telemetry.mean_lh_turn += ant.last_command.evidence.lh_turn;
+            telemetry.mean_mb_approach += ant.last_command.evidence.mb_approach;
+            telemetry.mean_mb_avoidance += ant.last_command.evidence.mb_avoidance;
+            telemetry.mean_cx_turn += ant.last_command.evidence.cx_turn;
+            telemetry.mean_rpe += ant.last_rpe;
+            telemetry.mean_eligibility += ant.eligibility_trace;
+        }
+        let n = ants.len() as f32;
+        telemetry.mean_turn_drive /= n;
+        telemetry.mean_lh_turn /= n;
+        telemetry.mean_mb_approach /= n;
+        telemetry.mean_mb_avoidance /= n;
+        telemetry.mean_cx_turn /= n;
+        telemetry.mean_rpe /= n;
+        telemetry.mean_eligibility /= n;
+        telemetry
+    }
+}
+
 impl TaskFractions {
     pub fn from_ants(ants: &[Ant]) -> Self {
         if ants.is_empty() {
@@ -111,6 +155,9 @@ pub struct Simulator {
     pub brain_mb: bool,
     /// FSM + central-complex (CX) neural path integration (T9)
     pub brain_cx: bool,
+    /// Opt-in circuit composition: PN/LH + MB + CX compete through the shared
+    /// ActionCommand interface. Legacy modes remain isolated baselines.
+    pub brain_integrated: bool,
     /// territorial war mode (T6.3): ants attack enemy-colony ants
     pub war: bool,
     /// seasonal/ecological dynamics (T7.7): food regrows, predators raid
@@ -196,6 +243,7 @@ impl Simulator {
             brain_snn: false,
             brain_mb: false,
             brain_cx: false,
+            brain_integrated: false,
             war: false,
             seasonal: false,
             ablate_octopamine: false,
@@ -218,6 +266,10 @@ impl Simulator {
             bridge_flow: BridgeFlow::default(),
             spatial: SpatialHash::new(width, height),
         }
+    }
+
+    pub fn brain_telemetry(&self) -> BrainTelemetry {
+        BrainTelemetry::from_ants(&self.ants)
     }
 
     pub fn step(&mut self) {
@@ -266,6 +318,7 @@ impl Simulator {
             self.brain_snn,
             self.brain_mb,
             self.brain_cx,
+            self.brain_integrated,
         );
         self.record_bridge_crossings(&previous_positions);
 
@@ -914,9 +967,18 @@ fn step_ants(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
+    brain_integrated: bool,
 ) {
-    ants.par_iter_mut()
-        .for_each(|a| a.update(world, brain_ann, brain_snn, brain_mb, brain_cx));
+    ants.par_iter_mut().for_each(|a| {
+        a.update(
+            world,
+            brain_ann,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            brain_integrated,
+        )
+    });
 }
 
 #[cfg(test)]
@@ -1062,6 +1124,27 @@ mod tests {
             "collected differs"
         );
         assert_eq!(a.ants.len(), b.ants.len(), "alive count differs");
+    }
+
+    #[test]
+    fn integrated_brain_is_deterministic_and_reports_evidence() {
+        let mut a = sim_two(17);
+        let mut b = sim_two(17);
+        a.brain_integrated = true;
+        b.brain_integrated = true;
+        for _ in 0..120 {
+            a.step();
+            b.step();
+        }
+        let ta = a.brain_telemetry();
+        let tb = b.brain_telemetry();
+        assert!((a.collected - b.collected).abs() < 1e-6);
+        assert_eq!(a.ants.len(), b.ants.len());
+        assert!(ta.mean_turn_drive.is_finite());
+        assert!(ta.mean_lh_turn.is_finite());
+        assert!(ta.mean_mb_approach.is_finite());
+        assert!(ta.mean_cx_turn.is_finite());
+        assert!((ta.mean_turn_drive - tb.mean_turn_drive).abs() < 1e-6);
     }
 
     #[test]

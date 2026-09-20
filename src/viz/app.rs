@@ -97,14 +97,17 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // apply brain mode to the live sim (fsm/ann/cppn/mb/cx)
+        // apply brain mode to the live sim (fsm/ann/cppn/mb/cx/integrated)
+        let want_integrated = self.brain == "integrated";
         let want_mb = self.brain == "mb";
         let want_cx = self.brain == "cx";
         let want_ann = self.brain == "ann" || self.brain == "cppn";
-        if self.sim.brain_mb != want_mb
+        if self.sim.brain_integrated != want_integrated
+            || self.sim.brain_mb != want_mb
             || self.sim.brain_cx != want_cx
             || self.sim.brain_ann != want_ann
         {
+            self.sim.brain_integrated = want_integrated;
             self.sim.brain_mb = want_mb;
             self.sim.brain_cx = want_cx;
             self.sim.brain_ann = want_ann;
@@ -260,7 +263,7 @@ impl eframe::App for App {
                 egui::ComboBox::from_id_salt("brain_combo")
                     .selected_text(&self.brain)
                     .show_ui(ui, |ui| {
-                        for b in ["fsm", "ann", "cppn", "mb", "cx"] {
+                        for b in ["fsm", "ann", "cppn", "mb", "cx", "integrated"] {
                             ui.selectable_value(&mut self.brain, b.to_string(), b);
                         }
                     });

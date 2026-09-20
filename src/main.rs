@@ -76,6 +76,7 @@ struct AblationReadout {
 }
 
 fn apply_brain(sim: &mut sim::Simulator, brain: &str) {
+    sim.brain_integrated = brain == "integrated";
     sim.brain_ann = brain == "ann" || brain == "cppn";
     sim.brain_snn = brain == "snn";
     sim.brain_mb = brain == "mb";
@@ -293,7 +294,8 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
     let brain_snn = arg_value(args, "--brain", "fsm") == "snn";
     let brain_mb = arg_value(args, "--brain", "fsm") == "mb";
     let brain_cx = arg_value(args, "--brain", "fsm") == "cx";
-    let use_cx = brain_cx || args.iter().any(|a| a == "--use-cx");
+    let brain_integrated = arg_value(args, "--brain", "fsm") == "integrated";
+    let use_cx = brain_cx || brain_integrated || args.iter().any(|a| a == "--use-cx");
     let social_contact = args.iter().any(|a| a == "--social-contact");
     let niche = args.iter().any(|a| a == "--niche");
     let novelty = args.iter().any(|a| a == "--novelty");
@@ -333,6 +335,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             brain_snn,
             brain_mb,
             brain_cx,
+            brain_integrated,
             seasonal,
             niche,
             novelty,
@@ -434,6 +437,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             brain_snn,
             brain_mb,
             brain_cx,
+            brain_integrated,
             seasonal,
         );
         for r in &res.history {
@@ -512,6 +516,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 brain_snn,
                 brain_mb,
                 brain_cx,
+                brain_integrated,
                 seasonal,
                 niche,
                 novelty,
@@ -2122,6 +2127,7 @@ draw();
                 brain_snn,
                 brain_mb,
                 brain_cx,
+                brain_integrated,
                 seasonal,
             );
             let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{name}.toml"))
@@ -2137,6 +2143,7 @@ draw();
                 brain_snn,
                 brain_mb,
                 brain_cx,
+                brain_integrated,
                 seasonal,
             );
             let eff = champ_fit.collected / ticks as f32;
@@ -2206,6 +2213,7 @@ draw();
                     brain_snn,
                     brain_mb,
                     brain_cx,
+                    brain_integrated,
                     seasonal,
                 );
                 print!(" {:>10.1}", fit.score);
@@ -2249,6 +2257,7 @@ draw();
                         brain_snn,
                         brain_mb,
                         brain_cx,
+                        brain_integrated,
                         seasonal,
                     )
                     .score,
@@ -2285,6 +2294,7 @@ draw();
             brain_snn,
             brain_mb,
             brain_cx,
+            brain_integrated,
             seasonal,
         );
         println!(
@@ -2414,6 +2424,7 @@ draw();
     sim.brain_snn = brain_snn;
     sim.brain_mb = brain_mb;
     sim.brain_cx = use_cx;
+    sim.brain_integrated = brain_integrated;
     sim.social_contact = social_contact;
     if brain_cppn {
         for a in sim.ants.iter_mut() {
@@ -2536,6 +2547,17 @@ draw();
                 line += &format!("{m:.3} ");
             }
             line += "]";
+            let bt = sim.brain_telemetry();
+            line += &format!(
+                " brain(turn={:.3} lh={:.3} mb={:.3}/{:.3} cx={:.3} rpe={:.3} e={:.3})",
+                bt.mean_turn_drive,
+                bt.mean_lh_turn,
+                bt.mean_mb_approach,
+                bt.mean_mb_avoidance,
+                bt.mean_cx_turn,
+                bt.mean_rpe,
+                bt.mean_eligibility
+            );
             println!("{line}");
             last_print = t + ticks / 10 + 1;
         }
@@ -2544,6 +2566,18 @@ draw();
     println!("---- final ----");
     println!("collected total = {:.0}", sim.collected);
     println!("ants alive = {}", sim.ants.len());
+    let bt = sim.brain_telemetry();
+    println!(
+        "brain telemetry: n={} turn={:.3} lh={:.3} mb={:.3}/{:.3} cx={:.3} rpe={:.3} eligibility={:.3}",
+        bt.ants,
+        bt.mean_turn_drive,
+        bt.mean_lh_turn,
+        bt.mean_mb_approach,
+        bt.mean_mb_avoidance,
+        bt.mean_cx_turn,
+        bt.mean_rpe,
+        bt.mean_eligibility
+    );
     // T13: developmental neurogenesis telemetry — MB volume (active KC count)
     // grows from MB_KC_INIT toward MB_KC as ants accumulate foraging rewards.
     if !sim.ants.is_empty() {

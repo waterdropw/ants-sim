@@ -281,6 +281,7 @@ impl Ant {
         brain_snn: bool,
         brain_mb: bool,
         brain_cx: bool,
+        brain_integrated: bool,
     ) {
         if self.dead {
             return;
@@ -316,14 +317,14 @@ impl Ant {
         // CX is a reusable navigation submodule, not a controller-exclusive
         // storage replacement. Its action evidence is available to every brain
         // mode when the simulator enables it.
-        self.use_cx = brain_cx;
+        self.use_cx = brain_cx || brain_integrated;
         let s = sensors::sense(self, world);
         let code = sensors::encode(self, &s);
         // Legacy controllers remain comparable, but their heading write is
         // captured and converted into an explicit descending action command.
         let decision_heading = self.heading;
-        if brain_mb {
-            brain::mb_decide(self, &s, world);
+        if brain_mb || brain_integrated {
+            brain::mb_decide_with_code(self, &s, &code, world);
         } else if brain_snn {
             brain::snn_decide(self, &s, world);
         } else if brain_ann {
@@ -362,8 +363,16 @@ impl Ant {
             attack_drive,
             evidence: ActionEvidence {
                 lh_turn: code.lh_turn,
-                mb_approach: if brain_mb { self.mb_out_v[0] } else { 0.0 },
-                mb_avoidance: if brain_mb { self.mb_out_v[3] } else { 0.0 },
+                mb_approach: if brain_mb || brain_integrated {
+                    self.mb_out_v[0]
+                } else {
+                    0.0
+                },
+                mb_avoidance: if brain_mb || brain_integrated {
+                    self.mb_out_v[3]
+                } else {
+                    0.0
+                },
                 cx_turn: if self.use_cx {
                     command_cx_turn(self)
                 } else {
@@ -379,13 +388,19 @@ impl Ant {
         // The reusable CX output joins the descending competition explicitly.
         // It is gated on the same carry/home context as the existing homing
         // policy, preventing an empty-vector CX bump from steering explorers.
-        if self.use_cx && self.carrying && !self.ablate_cx_motor {
-            command.turn_drive = (command.turn_drive
-                + self.genome.cx_motor_gain * command.evidence.cx_turn)
-                .clamp(-1.0, 1.0);
-        } else {
-            command.turn_drive = command.turn_drive.clamp(-1.0, 1.0);
+        if brain_integrated {
+            // In the opt-in integrated mode, each source is an explicit term in
+            // the descending competition. MB's legacy turn remains the learned
+            // policy baseline; LH adds a fast prior and MBON outputs resolve
+            // approach/avoidance conflict before the bounded motor command.
+            command.turn_drive += 0.35 * command.evidence.lh_turn;
+            command.turn_drive +=
+                0.20 * (command.evidence.mb_approach - command.evidence.mb_avoidance).tanh();
         }
+        if self.use_cx && self.carrying && !self.ablate_cx_motor {
+            command.turn_drive += self.genome.cx_motor_gain * command.evidence.cx_turn;
+        }
+        command.turn_drive = command.turn_drive.clamp(-1.0, 1.0);
         self.heading += command.turn_drive * self.genome.turn_rate;
         let ix = self.pos.x as i32;
         let iy = self.pos.y as i32;
@@ -577,7 +592,7 @@ mod tests {
         let g = Genome::default();
         let world = World::new(64, 64, Vec2::new(32.0, 32.0), 4.0);
         let mut ant = Ant::new(Vec2::new(12.0, 12.0), 0.0, &g, 7);
-        ant.update(&world, false, false, false, false);
+        ant.update(&world, false, false, false, false, false);
         assert!(ant.last_command.turn_drive.is_finite());
         assert!(ant.motor_feedback.actual_distance.is_finite());
         assert!(ant.motor_feedback.actual_distance >= 0.0);

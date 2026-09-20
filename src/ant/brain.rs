@@ -7,7 +7,7 @@
 //! `decide` only sets heading, transitions state and queues deposits; motion
 //! + bounds + wall-sliding happen in `Ant::update`.
 
-use crate::ant::sensors::Sensing;
+use crate::ant::sensors::{Sensing, SensoryCode};
 use crate::ant::{Ant, State};
 use crate::genome::{ann_weight_count, ANN_HID, ANN_IN, ANN_OUT};
 use crate::world::{Channel, World};
@@ -698,7 +698,10 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, _world: &World) {
 /// Antennal lobe: 16 inputs → 8 glomeruli (convergence + lateral
 /// inhibition + oscillation). Mushroom body: 8 → 64 sparse KC (random
 /// projection + high threshold). Output: 64 → 5 (tanh readout).
-pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+///
+/// Chemical amplitudes are read from the auditable PN projections in `code`;
+/// local spatial bearings remain in `s` because they are already observations.
+pub fn mb_decide_with_code(ant: &mut Ant, s: &Sensing, code: &SensoryCode, world: &World) {
     let g = &ant.genome;
     let w = &ant.learned_mb_w;
     let n = crate::genome::mb_weight_count();
@@ -744,7 +747,7 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // outbound ants from chasing noise when no trail exists yet; vision (when
     // food is in the forward cone) beelines directly, matching the FSM's visual
     // foraging — this is what lets the colony reach break-even before starving.
-    let tv = (s.trail_val * 20.0).tanh(); // trail-presence gate (was unused in mb)
+    let tv = (code.pn_single[0] * 20.0).tanh(); // PN trail-presence gate
     let vs = if s.vision_food_idx.is_some() {
         steer(s.vision_food_bearing)
     } else {
@@ -761,13 +764,13 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
         (0.0, 0.0, 0.0)
     };
     let nest_prox = 1.0 / (1.0 + s.nest_dist);
-    // 20 inputs: 4 channel vals, 4 steer sins, 4 steer coss, 4 state, +4 modality.
-    // Slots 3 and 15 carry the carrying-gated steer signals (T15 foraging prior).
+    // 20 inputs: 4 PN chemical channels, 4 steer sins, 4 steer coss, 4 state,
+    // and 4 multimodal terms. Slots 3 and 15 carry carrying-gated steer signals.
     let inputs: [f32; crate::genome::MB_AL_INPUTS] = [
-        s.trail_val,
-        s.home_val,
-        s.alarm_val,
-        out_steer, // 4 channel vals
+        code.pn_single[0],
+        code.pn_single[1],
+        code.pn_single[2],
+        out_steer, // PN channels plus outbound steer
         ts,
         ns,
         as_,
@@ -778,8 +781,8 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
         nc, // 4 cos signals
         c,
         ant.energy,
-        s.alarm_val,
-        in_steer, // 4 state vars
+        code.pn_mixed[0],
+        in_steer, // state plus mixed-PN evidence
         v_sin,
         v_cos,
         v_prox,
@@ -1004,6 +1007,13 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     } else {
         ant.state = State::Explore;
     }
+}
+
+/// Compatibility entry point for focused MB tests and callers without a
+/// precomputed sensory code. The simulator uses `mb_decide_with_code`.
+pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+    let code = crate::ant::sensors::encode(ant, s);
+    mb_decide_with_code(ant, s, &code, world);
 }
 
 #[cfg(test)]

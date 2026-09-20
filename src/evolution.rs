@@ -82,6 +82,7 @@ pub fn evaluate(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
+    brain_integrated: bool,
     seasonal: bool,
 ) -> Fitness {
     // Indirect encoding (T2.3): develop phenotype from compact genotype.
@@ -97,6 +98,7 @@ pub fn evaluate(
     sim.brain_snn = brain_snn;
     sim.brain_mb = brain_mb;
     sim.brain_cx = brain_cx;
+    sim.brain_integrated = brain_integrated;
     sim.apply_environment(env);
     // T7.7: in seasonal mode, start food at renewable levels
     if seasonal {
@@ -180,11 +182,22 @@ pub fn evaluate_multi(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
+    brain_integrated: bool,
     seasonal: bool,
 ) -> Fitness {
     if n_seeds <= 1 {
         return evaluate(
-            cfg, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx,
+            cfg,
+            env,
+            genome,
+            ticks,
+            colony,
+            brain_ann,
+            brain_cppn,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            brain_integrated,
             seasonal,
         );
     }
@@ -199,8 +212,18 @@ pub fn evaluate_multi(
         let mut cfgk = cfg.clone();
         cfgk.sim.seed = cfg.sim.seed.wrapping_add(k as u64 * 0x1000_0003);
         let f = evaluate(
-            &cfgk, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb,
-            brain_cx, seasonal,
+            &cfgk,
+            env,
+            genome,
+            ticks,
+            colony,
+            brain_ann,
+            brain_cppn,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            brain_integrated,
+            seasonal,
         );
         acc_col += f.collected;
         acc_def += f.mean_def_frac;
@@ -298,6 +321,7 @@ pub fn run(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
+    brain_integrated: bool,
     seasonal: bool,
     niche: bool,
     novelty: bool,
@@ -335,8 +359,19 @@ pub fn run(
             .iter()
             .map(|g| {
                 let f = evaluate_multi(
-                    cfg, env, g, ticks, colony, n_seeds, brain_ann, brain_cppn, brain_snn,
-                    brain_mb, brain_cx, seasonal,
+                    cfg,
+                    env,
+                    g,
+                    ticks,
+                    colony,
+                    n_seeds,
+                    brain_ann,
+                    brain_cppn,
+                    brain_snn,
+                    brain_mb,
+                    brain_cx,
+                    brain_integrated,
+                    seasonal,
                 );
                 (g.clone(), f)
             })
@@ -488,6 +523,7 @@ pub fn run_multilevel(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
+    brain_integrated: bool,
     _seasonal: bool,
 ) -> EvolveResult {
     use rand::{Rng, SeedableRng};
@@ -518,6 +554,7 @@ pub fn run_multilevel(
         sim.brain_snn = brain_snn;
         sim.brain_mb = brain_mb;
         sim.brain_cx = brain_cx;
+        sim.brain_integrated = brain_integrated;
         if brain_cppn {
             for a in sim.ants.iter_mut() {
                 a.genome.ann_weights = crate::genome::develop_phenotype(&a.genome);
