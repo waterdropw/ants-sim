@@ -57,6 +57,10 @@ pub fn decide(ant: &mut Ant, s: &Sensing, world: &World) {
     let arousal = ant.octopamine.clamp(0.0, crate::genome::OCT_MAX);
     let trail_thresh = g.trail_threshold * (1.0 - 0.5 * arousal);
     let explore = g.explore_rate * (1.0 + arousal);
+    // `follow_strength` is an evolvable chemotaxis gain. Normalize it around
+    // the historical default (3.0), preserving default behavior while letting
+    // evolution and bridge sensitivity assays vary trail responsiveness.
+    let trail_turn_scale = (0.2 + 0.1 * g.follow_strength).clamp(0.2, 1.0);
     let aggressive = g.aggression + g.aggression_baseline + 0.5 * arousal > 0.5;
 
     // ---- priority 1: direct enemy contact → alarm + engage ----
@@ -96,7 +100,8 @@ pub fn decide(ant: &mut Ant, s: &Sensing, world: &World) {
             // exploration noise persists, sustaining dispersal to multiple
             // sources. Real ants follow trails with error, not deterministically.
             if s.trail_val > trail_thresh {
-                ant.heading = steer_toward(ant.heading, s.trail_bearing, g.turn_rate * 0.5);
+                ant.heading =
+                    steer_toward(ant.heading, s.trail_bearing, g.turn_rate * trail_turn_scale);
             }
             // outbound: mark the home path (denser near nest → gradient to nest)
             ant.pending_deposits
@@ -134,7 +139,8 @@ pub fn decide(ant: &mut Ant, s: &Sensing, world: &World) {
             // + occasional drop-to-Explore sustains an exploring fraction so
             // multiple sources get exploited (avoids single-path bottleneck).
             if s.trail_val > g.trail_threshold * 0.3 && !ant.rng.gen_bool(0.03) {
-                ant.heading = steer_toward(ant.heading, s.trail_bearing, g.turn_rate);
+                ant.heading =
+                    steer_toward(ant.heading, s.trail_bearing, g.turn_rate * trail_turn_scale);
                 ant.heading += ant.rng.gen_range(-explore * 0.3..=explore * 0.3);
             } else {
                 ant.state = State::Explore;
@@ -1096,6 +1102,44 @@ mod cx_tests {
         assert_eq!(ant.home_vector(), (3.0, 4.0));
         ant.use_cx = true;
         assert_eq!(ant.home_vector(), (-1.0, 2.0));
+    }
+}
+
+#[cfg(test)]
+mod fsm_tests {
+    use super::*;
+    use crate::ant::Ant;
+    use crate::genome::Genome;
+    use crate::world::{Vec2, World};
+
+    fn ant_with_follow_strength(follow_strength: f32) -> (Ant, World) {
+        let g = Genome {
+            follow_strength,
+            ..Genome::default()
+        };
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 4.0);
+        let mut ant = Ant::new(Vec2::new(50.0, 50.0), 0.0, &g, 7);
+        ant.age = 1_000;
+        (ant, world)
+    }
+
+    #[test]
+    fn fsm_follow_strength_scales_trail_steering() {
+        let s = Sensing {
+            trail_val: 1.0,
+            trail_bearing: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+        let (mut weak, world) = ant_with_follow_strength(0.5);
+        let (mut strong, _) = ant_with_follow_strength(6.0);
+        decide(&mut weak, &s, &world);
+        decide(&mut strong, &s, &world);
+        assert!(
+            strong.heading > weak.heading,
+            "stronger chemotaxis should yield a larger turn: {} <= {}",
+            strong.heading,
+            weak.heading
+        );
     }
 }
 
