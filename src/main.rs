@@ -874,6 +874,83 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if args.iter().any(|a| a == "--bridge-decay-sweep") {
+        let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
+        let sweep_ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let n_seeds: usize = arg_value(args, "--n-seeds", "5")
+            .parse()
+            .unwrap_or(5)
+            .max(1);
+        let decays = [0.002_f32, 0.0075, 0.015, 0.03, 0.05];
+        let geometry = {
+            let mut simulator =
+                sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
+            simulator.scenario_two_bridge();
+            simulator.bridge_route_lengths()
+        };
+        let mut csv = String::from(
+            "trail_decay,seed,short_inbound,long_inbound,inbound_total,short_inbound_fraction\n",
+        );
+        println!(
+            "BRIDGE_DECAY_SWEEP actual gate traffic colony={colony} ticks={sweep_ticks} n_seeds={n_seeds}"
+        );
+        match geometry {
+            Some(lengths) => println!(
+                "  geometry: short={} grid steps long={} grid steps detour_ratio={:.2}x",
+                lengths.short_steps,
+                lengths.long_steps,
+                lengths.detour_ratio()
+            ),
+            None => println!("  geometry: UNRESOLVED (no traversable arm-specific route)"),
+        }
+        println!(
+            "{:<14} {:>15} {:>12} {:>12}",
+            "trail_decay", "fraction mean±sd", "valid seeds", "inbound mean"
+        );
+        for decay in decays {
+            let mut fractions = Moments::default();
+            let mut inbound_total = Moments::default();
+            for replicate in 0..n_seeds {
+                let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+                let genome = genome::Genome {
+                    trail_decay: decay,
+                    ..cfg.genome.clone()
+                };
+                let flow = run_bridge_trial(&cfg, &genome, seed, colony, sweep_ticks, false);
+                let fraction_cell = flow
+                    .short_inbound_fraction()
+                    .map(|fraction| {
+                        fractions.push(fraction as f64);
+                        format!("{fraction:.6}")
+                    })
+                    .unwrap_or_else(|| "NA".to_string());
+                inbound_total.push(flow.inbound_total() as f64);
+                csv.push_str(&format!(
+                    "{decay:.4},{seed},{},{},{},{}\n",
+                    flow.short_inbound,
+                    flow.long_inbound,
+                    flow.inbound_total(),
+                    fraction_cell
+                ));
+            }
+            let fraction = if fractions.display_count() > 0 {
+                format!("{:.3}±{}", fractions.mean, fractions.display_sd())
+            } else {
+                "NA (n=0)".to_string()
+            };
+            println!(
+                "{decay:<14.4} {fraction:>15} {:>12} {:>12.1}",
+                fractions.display_count(),
+                inbound_total.mean
+            );
+        }
+        let _ = std::fs::create_dir_all("results");
+        let _ = std::fs::write("results/bridge_decay_sweep.csv", csv);
+        println!("saved: results/bridge_decay_sweep.csv (per-seed actual gate-crossing traffic)");
+        println!("scope: sensitivity analysis for this abstract model; it does not calibrate a species-level trail lifetime or short-path preference.");
+        return Ok(());
+    }
+
     if args.iter().any(|a| a == "--bridge-sweep") {
         let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
         let sweep_ticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);

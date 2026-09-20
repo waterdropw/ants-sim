@@ -151,6 +151,10 @@ impl Simulator {
             Vec2::new(width as f32 / 2.0, height as f32 / 2.0),
             6.0,
         );
+        // The genome owns Trail's behavioral and chemical parameters. Keep the
+        // field's Trail evaporation synchronized so `trail_decay` controls the
+        // same signal that ants sense and follow (rather than a dormant gene).
+        world.decay[World::ch_idx(Channel::Trail)] = genome.trail_decay;
         // default food source for the single-ant M2 loop
         world.food.push(crate::world::FoodSource {
             pos: Vec2::new(width as f32 * 0.8, height as f32 * 0.5),
@@ -839,6 +843,20 @@ mod tests {
         s.set_colony_size(60, &g);
         s.scenario_single();
         s
+    }
+
+    #[test]
+    fn genome_trail_decay_configures_trail_chemistry() {
+        let g = Genome {
+            trail_decay: 0.037,
+            ..Genome::default()
+        };
+        let simulator = Simulator::new(64, 64, 1, &g);
+        assert!(
+            (simulator.world.decay[World::ch_idx(Channel::Trail)] - g.trail_decay).abs()
+                < f32::EPSILON,
+            "Trail field decay must come from the genome"
+        );
     }
 
     #[test]
