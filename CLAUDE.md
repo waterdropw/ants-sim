@@ -21,9 +21,9 @@
 - `fsm`（默认）：子sumption FSM + 神经调质 + 梯度上升
 - `ann`：固定 MLP(9→10→5)，权重可演化，门控输入+觅食种子
 - `cppn`：间接编码——16 cppn_genes → 155 权重(余弦基发育)
-- `mb`：蘑菇体(AL+MB+STDP+多巴胺+神经发生)——Tier 8/10/13/15/16/17/18，12瞌小球多模态→64稀疏KC→5输出；KC随经验 24→64。Tier 15 修复觅食活力(分级AL→turn反射+育幼eclosion)，evolved 3000t collected 304→2191。Tier 16 多巴胺RPE化：双通道(reward PAM/punish PPL1)门控STDP，reward→LTP、punish→LTD(基线遗忘+aversive增强)，伤害释放punish→aversive学习；ANN STDP 也纳入同款门控。Tier 17 饱食调制(奖励gain随能量缺口)+AL→KC Hebbian可塑性(基底KC,检测器保护)。Tier 18 分室化DAN(approach/avoidance opponent, PAM/PPL1分室)
+- `mb`：蘑菇体(AL+MB+STDP+多巴胺+神经发生)——Tier 8/10/13/15/16/17/18，12瞌小球多模态→64稀疏KC→5输出；KC随经验 24→64。Tier 15 修复觅食活力(分级AL→turn反射+育幼eclosion)，evolved 3000t collected 304→2191。Tier 16 多巴胺RPE化：双通道(reward PAM/punish PPL1)门控STDP，reward→LTP、punish→LTD(基线遗忘+aversive增强)，伤害释放punish→aversive学习；SNN STDP 也纳入同款门控（ANN 为固定演化基线）。Tier 17 饱食调制(奖励gain随能量缺口)+AL→KC Hebbian可塑性(基底KC,检测器保护)。Tier 18 分室化DAN(approach/avoidance opponent, PAM/PPL1分室)
 - `cx`：中央复合体(环吸引子路径积分)——Tier 9，CX_N=16 神经积分读出(home_vector)，替代软件真值；演化后 out-of-box 597。`--bench-cx` 量化PI误差(0.0–0.3%) vs 沙漠蚁Cataglyphis
-- 神经调质(Tier 11/16/18)：octopamine 经验驱动→探索/轨迹阈值/攻击性；dopamine 双通道(reward/punish)分室化门控 MB+ANN STDP；CPG(Tier 14)：6腿tripod+octopamine→步频→速度
+- 神经调质(Tier 11/16/18)：octopamine 经验驱动→探索/轨迹阈值/攻击性；dopamine 双通道(reward/punish)分室化门控 MB+SNN STDP；CPG(Tier 14)：6腿tripod+octopamine→步频→速度
 - 演化(Tier 19)：novelty search(NSLC-lite, --novelty, 行为新颖度驱动选择) + 行为多样性度量(T18.2)；6脑全活力化(MB/SNN Tier15/19 修复, 不再垫底)
 
 ## 跑

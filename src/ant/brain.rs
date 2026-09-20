@@ -229,6 +229,11 @@ fn wrap_angle(mut d: f32) -> f32 {
     d
 }
 
+/// Public angle helper used by the body-side action executor.
+pub fn wrap_angle_public(d: f32) -> f32 {
+    wrap_angle(d)
+}
+
 /// T9 central complex (CX): ring-attractor heading update + neural path
 /// integration. Called once per tick AFTER motion (from `Ant::update`) so
 /// the angular velocity reflects the actual travel direction (decide-turns,
@@ -246,13 +251,37 @@ fn wrap_angle(mut d: f32) -> f32 {
 /// heading for stride integration — the home vector accumulates
 /// dist·(cos H_est, sin H_est) with a small leak, and zeros at the nest.
 pub fn cx_integrate(ant: &mut Ant, world: &World, dist: f32) {
+    // Compatibility numeric baseline used by legacy tests/benchmarks. Runtime
+    // code calls `cx_integrate_observed` with an explicit compass observation.
+    let compass = crate::ant::sensors::CompassObservation {
+        bearing: ant.heading,
+        confidence: 1.0,
+        available: true,
+    };
+    cx_integrate_observed(ant, world, dist, compass);
+}
+
+/// CX ring update driven by a sensory compass observation plus actual executed
+/// distance. The body heading is used only for angular self-motion shift; it is
+/// never injected as compass evidence.
+pub fn cx_integrate_observed(
+    ant: &mut Ant,
+    world: &World,
+    dist: f32,
+    compass: crate::ant::sensors::CompassObservation,
+) {
     let g = &ant.genome;
     let n = crate::genome::CX_N;
     let tau = std::f32::consts::TAU;
-    let dh = wrap_angle(ant.heading - ant.cx_prev_heading);
+    let dh = ant.motor_feedback.actual_turn;
     ant.cx_prev_heading = ant.heading;
     let shift = g.cx_shift_gain * dh;
-    let h_true = ant.heading;
+    let compass_gain = if compass.available {
+        g.cx_compass_gain * compass.confidence
+    } else {
+        0.0
+    };
+    let compass_bearing = compass.bearing;
 
     let mut newb = [0.0f32; crate::genome::CX_N];
     for i in 0..n {
@@ -265,8 +294,9 @@ pub fn cx_integrate(ant: &mut Ant, world: &World, dist: f32) {
             let k = g.cx_bump_gain * d.cos() - g.cx_inhibition;
             acc += k * ant.cx_bump[j];
         }
-        // sun-compass sensory injection (rectified cosine tuning)
-        acc += g.cx_compass_gain * (th_i - h_true).cos().max(0.0);
+        // No true-heading leak: this injection is solely the noisy/occluded
+        // CompassObservation made by the sensory layer.
+        acc += compass_gain * (th_i - compass_bearing).cos().max(0.0);
         newb[i] = acc.max(0.0);
     }
     // divisive normalization (stable total activity → single bump)
@@ -326,9 +356,10 @@ pub fn cx_home_error(ant: &Ant) -> (f32, f32) {
 
 /// ANN decision layer (T2.2). Fixed-topology MLP: inputs (sensors relative
 /// to heading + state) → tanh hidden → linear outputs (turn, deposits,
-/// attack). Weights live in `genome.ann_weights`. The network learns, via
-/// evolution, to follow trails / return home / defend — replacing the hand-
-/// written FSM when `--brain ann` is set.
+/// attack). Weights live in `genome.ann_weights`; this direct ANN is an
+/// evolution-only, lifetime-fixed baseline. The similarly shaped SNN is the
+/// controller that reads the per-ant STDP weight copy. `--brain ann` replaces
+/// the handwritten FSM.
 pub fn ann_decide(ant: &mut Ant, s: &Sensing, _world: &World) {
     let g = &ant.genome;
     let w = &g.ann_weights;
@@ -995,6 +1026,34 @@ mod cx_tests {
     /// settle into a single, localized bump whose decoded heading matches
     /// the true heading (within one ring cell).
     #[test]
+    fn cx_observation_occlusion_removes_compass_anchor() {
+        let (mut ant, world) = setup();
+        ant.motor_feedback.actual_turn = 0.0;
+        for _ in 0..20 {
+            cx_integrate_observed(
+                &mut ant,
+                &world,
+                0.5,
+                crate::ant::sensors::CompassObservation {
+                    bearing: 0.0,
+                    confidence: 1.0,
+                    available: true,
+                },
+            );
+        }
+        let anchored = cx_heading(&ant);
+        for _ in 0..10 {
+            cx_integrate_observed(
+                &mut ant,
+                &world,
+                0.5,
+                crate::ant::sensors::CompassObservation::default(),
+            );
+        }
+        assert!(wrap_angle(cx_heading(&ant) - anchored).abs() < 0.5);
+    }
+
+    #[test]
     fn cx_bump_stable_and_tracks_heading() {
         let (mut ant, world) = setup();
         let h = 0.7_f32; // constant heading
@@ -1302,6 +1361,51 @@ mod snn_tests {
     use crate::ant::Ant;
     use crate::genome::Genome;
     use crate::world::{Vec2, World};
+
+    /// The direct ANN is intentionally evolution-only: its decision path must
+    /// never read or alter the SNN-private lifetime plasticity copy.
+    #[test]
+    fn ann_decision_does_not_modify_snn_learned_weights() {
+        let g = Genome::default();
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 6.0);
+        let mut ant = Ant::new(Vec2::new(50.0, 50.0), 0.0, &g, 7);
+        ant.age = 1_000;
+        ant.learned_w.iter_mut().for_each(|weight| *weight = -3.0);
+        let before = ant.learned_w.clone();
+        let s = Sensing {
+            trail_val: 0.5,
+            trail_bearing: std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        };
+
+        ann_decide(&mut ant, &s, &world);
+
+        assert_eq!(ant.learned_w, before);
+    }
+
+    /// In contrast to the direct ANN, the SNN uses the private weight copy:
+    /// a recent hidden spike plus a dopamine-gated output spike potentiates W2.
+    #[test]
+    fn snn_reward_gated_stdp_modifies_learned_w2() {
+        let g = Genome::default();
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 6.0);
+        let mut ant = Ant::new(Vec2::new(50.0, 50.0), 0.0, &g, 7);
+        ant.age = 1_000;
+        ant.learned_w.fill(0.0);
+        ant.lif_v = [0.99; ANN_HID]; // decays below threshold this tick
+        ant.lif_v_out = [1.3; ANN_OUT]; // remains above threshold this tick
+        ant.last_spike_h = [999; ANN_HID]; // valid pre-before-post trace
+        ant.dopamine_reward = crate::genome::DOPAMINE_THRESH + 0.1;
+        let w2_off = ANN_IN * ANN_HID + ANN_HID;
+        let before = ant.learned_w[w2_off];
+
+        snn_decide(&mut ant, &Sensing::default(), &world);
+
+        assert!(
+            ant.learned_w[w2_off] > before,
+            "reward-gated SNN STDP must potentiate the learned W2 copy"
+        );
+    }
 
     /// T19.2: a young SNN ant at the nest nurses brood (age polyethism),
     /// mirroring FSM/MB — gives SNN the eclosion colony-growth engine.

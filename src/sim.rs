@@ -104,9 +104,9 @@ pub struct Simulator {
     pub source_visits: Vec<u32>,
     /// enable ant-ant interaction bookkeeping (spatial hash rebuild each tick)
     pub interact: bool,
-    /// use the ANN decision layer (T2.2) instead of the FSM
+    /// use the fixed, evolution-only ANN decision layer (T2.2) instead of the FSM
     pub brain_ann: bool,
-    /// use LIF spiking decision layer (T3-gap9)
+    /// use the LIF spiking decision layer (T3-gap9) with lifetime STDP
     pub brain_snn: bool,
     pub brain_mb: bool,
     /// FSM + central-complex (CX) neural path integration (T9)
@@ -136,6 +136,17 @@ pub struct Simulator {
     /// T22: STDP ablation (plasticity-blockade analog) — propagated to per-ant
     /// flag, mb/snn skip lifetime synaptic plasticity.
     pub ablate_stdp: bool,
+    /// Early sensory and social counterfactual switches. They are model-level
+    /// implementation perturbations, not biological interventions.
+    pub ablate_al_inhibition: bool,
+    pub ablate_pn_multichannel: bool,
+    pub ablate_lh_reflex: bool,
+    pub ablate_orn: bool,
+    pub ablate_compass: bool,
+    pub ablate_cx_motor: bool,
+    pub ablate_contact: bool,
+    /// Enables serial antenna-contact events without changing default baseline.
+    pub social_contact: bool,
     /// Gates are registered only by the two-bridge scenario.
     pub bridge_gates: Option<[BridgeGate; 2]>,
     /// Cumulative actual ant traffic through the registered bridge gates.
@@ -195,6 +206,14 @@ impl Simulator {
             ablate_punish: false,
             ablate_vision: false,
             ablate_stdp: false,
+            ablate_al_inhibition: false,
+            ablate_pn_multichannel: false,
+            ablate_lh_reflex: false,
+            ablate_orn: false,
+            ablate_compass: false,
+            ablate_cx_motor: false,
+            ablate_contact: false,
+            social_contact: false,
             bridge_gates: None,
             bridge_flow: BridgeFlow::default(),
             spatial: SpatialHash::new(width, height),
@@ -233,6 +252,12 @@ impl Simulator {
         for a in self.ants.iter_mut() {
             a.ablate_vision = self.ablate_vision;
             a.ablate_stdp = self.ablate_stdp;
+            a.ablate_al_inhibition = self.ablate_al_inhibition;
+            a.ablate_pn_multichannel = self.ablate_pn_multichannel;
+            a.ablate_lh_reflex = self.ablate_lh_reflex;
+            a.ablate_orn = self.ablate_orn;
+            a.ablate_compass = self.ablate_compass;
+            a.ablate_cx_motor = self.ablate_cx_motor;
         }
         step_ants(
             &mut self.ants,
@@ -307,6 +332,25 @@ impl Simulator {
                     (a.dopamine_reward + eff_reward * 0.5).min(crate::genome::DOPAMINE_MAX);
             }
         }
+        // RPE update is deliberately after serial consequences (pickup,
+        // delivery, injury) and before the next sensory decision. Eligibility
+        // itself is accumulated by each ant during its parallel brain step.
+        for a in self.ants.iter_mut() {
+            let reward = a.delivered as f32 + if a.pending_pickup.is_some() { 0.5 } else { 0.0 };
+            let punishment = if a.health <= 0.0 { 1.0 } else { 0.0 };
+            let delta = reward - punishment - a.value_estimate;
+            a.last_rpe = delta;
+            a.value_estimate += a.genome.mb_rpe_lr * delta;
+            let scaled = delta * a.eligibility_trace.clamp(0.0, 1.0);
+            if scaled >= 0.0 && !self.ablate_reward {
+                a.dopamine_reward = (a.dopamine_reward + scaled * a.genome.mb_dopamine_reward_gain)
+                    .min(crate::genome::DOPAMINE_MAX);
+            } else if scaled < 0.0 && !self.ablate_punish {
+                a.dopamine_punish = (a.dopamine_punish
+                    + -scaled * a.genome.mb_dopamine_punish_gain)
+                    .min(crate::genome::DOPAMINE_MAX);
+            }
+        }
         // trophallaxis (T7.3): redistribute colony energy to nest ants.
         // Nest ants (within nest_radius) draw from the shared pool — modeling
         // mouth-to-mouth food sharing. Foragers deposit (above), nest-mates draw.
@@ -361,7 +405,7 @@ impl Simulator {
                 if dmg[i] > 0.0 {
                     a.health -= dmg[i];
                     // T16: damage is the aversive US → release punish dopamine
-                    // (PPL1 analog) so MB/ANN STDP does LTD on the KCs/hidden
+                    // (PPL1 analog) so MB/SNN STDP does LTD on the KCs/hidden
                     // units active when the ant was hurt → avoidance learning.
                     // T22 ablation: skip punish release (PPL1-silence analog).
                     if !self.ablate_punish {
@@ -429,6 +473,49 @@ impl Simulator {
                     radius: 2.0,
                     health: 10.0,
                 });
+            }
+        }
+        // Serial social feedback: pairs are discovered through the spatial
+        // hash, but no ant writes another ant's state during the parallel step.
+        // A carrier offers a local recruitment direction to a same-colony peer.
+        if self.social_contact && !self.ablate_contact {
+            const CONTACT_RANGE: f32 = 2.0;
+            let pos: Vec<Vec2> = self.ants.iter().map(|a| a.pos).collect();
+            let colonies: Vec<u8> = self.ants.iter().map(|a| a.colony_id).collect();
+            let carriers: Vec<bool> = self.ants.iter().map(|a| a.carrying).collect();
+            self.spatial.rebuild(&pos);
+            let mut events = Vec::new();
+            for i in 0..pos.len() {
+                self.spatial
+                    .query_near(&pos, pos[i], CONTACT_RANGE, |j, _| {
+                        if j > i && colonies[i] == colonies[j] {
+                            let (offer, accept) = match (carriers[i], carriers[j]) {
+                                (true, false) => (i, j),
+                                (false, true) => (j, i),
+                                _ => return,
+                            };
+                            let bearing =
+                                (pos[offer].y - pos[accept].y).atan2(pos[offer].x - pos[accept].x);
+                            events.push((offer, accept, bearing));
+                        }
+                    });
+            }
+            for a in self.ants.iter_mut() {
+                a.contact_signal *= 0.8;
+                a.recruit_signal *= 0.8;
+            }
+            for (offer, accept, bearing) in events {
+                let gain = self.ants[offer].genome.social_contact_gain;
+                self.ants[offer].contact_signal = 1.0;
+                self.ants[accept].contact_signal = 1.0;
+                self.ants[accept].recruit_signal =
+                    (self.ants[accept].recruit_signal + gain).min(1.0);
+                self.ants[accept].recruit_bearing = bearing;
+            }
+        } else {
+            for a in self.ants.iter_mut() {
+                a.contact_signal = 0.0;
+                a.recruit_signal = 0.0;
             }
         }
         // ant-ant interaction bookkeeping (exercises spatial hash when enabled)
@@ -843,6 +930,22 @@ mod tests {
         s.set_colony_size(60, &g);
         s.scenario_single();
         s
+    }
+
+    #[test]
+    fn serial_contact_offer_is_delivered_next_tick() {
+        let g = Genome::default();
+        let mut s = Simulator::new(64, 64, 2, &g);
+        let mut offer = Ant::new(Vec2::new(20.0, 20.0), 0.0, &g, 1);
+        let mut accept = Ant::new(Vec2::new(20.5, 20.0), 0.0, &g, 2);
+        offer.carrying = true;
+        offer.age = 1_000;
+        accept.age = 1_000;
+        s.ants = vec![offer, accept];
+        s.social_contact = true;
+        s.step();
+        assert!(s.ants.iter().any(|a| a.recruit_signal > 0.0));
+        assert!(s.ants.iter().all(|a| a.contact_signal > 0.0));
     }
 
     #[test]

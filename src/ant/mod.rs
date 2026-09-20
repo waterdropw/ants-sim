@@ -6,9 +6,42 @@ pub mod brain;
 pub mod sensors;
 
 use crate::genome::Genome;
-use crate::world::World;
+use crate::world::{Channel, World};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+
+/// Module-level support for a motor decision. Positive and negative values are
+/// allowed: action selection is an explicit competition, not call-order writes.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ActionEvidence {
+    pub lh_turn: f32,
+    pub mb_approach: f32,
+    pub mb_avoidance: f32,
+    pub cx_turn: f32,
+    pub safety_turn: f32,
+}
+
+/// The sole command passed from brain-side computation to the body layer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ActionCommand {
+    pub turn_drive: f32,
+    pub speed_drive: f32,
+    pub deposit: [f32; 4],
+    pub attack_drive: f32,
+    pub task_switch_drive: f32,
+    pub evidence: ActionEvidence,
+}
+
+/// Result of executing the previous command. It is body feedback rather than
+/// a desired velocity, and can therefore be used safely by CX/learning later.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MotorFeedback {
+    pub actual_turn: f32,
+    pub actual_distance: f32,
+    pub wall_contact: bool,
+    pub energy_cost: f32,
+    pub gait_phase: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -38,9 +71,10 @@ pub struct Ant {
     /// forward pass.
     pub lif_v: [f32; 10], // hidden membrane potentials
     pub lif_v_out: [f32; 5], // output membrane potentials
-    /// learnable weight copy (T7.2 STDP): initialized from genome.ann_weights
-    /// at birth, modified by spike-timing-dependent plasticity during life.
-    /// Evolution selects the innate genome; STDP tunes the learned copy.
+    /// SNN-private learnable weight copy (T7.2 STDP), initialized from
+    /// `genome.ann_weights` at birth and modified during life. The direct ANN
+    /// intentionally reads the immutable genome weights and is an
+    /// evolution-only baseline; the similarly shaped SNN reads this copy.
     pub learned_w: Vec<f32>,
     /// last tick each hidden/output neuron spiked (0 = never) for STDP.
     pub last_spike_h: [u32; 10],
@@ -53,11 +87,11 @@ pub struct Ant {
     pub learned_mb_w: Vec<f32>,  // STDP-modifiable MB weight copy
     pub last_kc_spike: Vec<u32>, // last spike tick per KC (for STDP)
     // T15: MB-private output-spike ticks (was reusing last_spike_o, shared with
-    // the ANN STDP path — benign while one brain runs per ant, but the field
+    // the SNN STDP path — benign while one brain runs per ant, but the field
     // was not MB-specific; give MB its own to remove the cross-brain coupling).
     pub last_mb_out_spike: [u32; crate::genome::MB_OUT],
     // T16 dual-channel dopamine (PAM/PPL1 analog): reward (food→LTP) and
-    // punish (damage→LTD). Both decay fast; gate MB + ANN STDP by sign.
+    // punish (damage→LTD). Both decay fast; gate MB + SNN STDP by sign.
     pub dopamine_reward: f32,
     pub dopamine_punish: f32,
     pub octopamine: f32, // foraging motivation (arousal)
@@ -66,6 +100,24 @@ pub struct Ant {
     /// stdp: skip lifetime synaptic plasticity.
     pub ablate_vision: bool,
     pub ablate_stdp: bool,
+    /// Early-circuit / navigation ablations are propagated by Simulator.
+    pub ablate_al_inhibition: bool,
+    pub ablate_pn_multichannel: bool,
+    pub ablate_lh_reflex: bool,
+    pub ablate_orn: bool,
+    pub ablate_compass: bool,
+    pub ablate_cx_motor: bool,
+    pub orn_adaptation: [f32; crate::ant::sensors::CHEM_CHANNELS],
+    /// Social observations are populated only by the serial contact flush.
+    pub contact_signal: f32,
+    pub recruit_signal: f32,
+    pub recruit_bearing: f32,
+    /// RPE state is deliberately separate from dopamine pulses.
+    pub value_estimate: f32,
+    pub eligibility_trace: f32,
+    pub last_rpe: f32,
+    pub last_command: ActionCommand,
+    pub motor_feedback: MotorFeedback,
     pub leg_phase: [f32; crate::genome::CPG_LEGS], // T14 CPG tripod gait phases
     // T9 central complex (CX): ring-attractor heading + neural path
     // integration. Active only in --brain cx mode (use_cx). The software
@@ -139,6 +191,21 @@ impl Ant {
             octopamine: 0.0,
             ablate_vision: false,
             ablate_stdp: false,
+            ablate_al_inhibition: false,
+            ablate_pn_multichannel: false,
+            ablate_lh_reflex: false,
+            ablate_orn: false,
+            ablate_compass: false,
+            ablate_cx_motor: false,
+            orn_adaptation: [0.0; crate::ant::sensors::CHEM_CHANNELS],
+            contact_signal: 0.0,
+            recruit_signal: 0.0,
+            recruit_bearing: 0.0,
+            value_estimate: 0.0,
+            eligibility_trace: 0.0,
+            last_rpe: 0.0,
+            last_command: ActionCommand::default(),
+            motor_feedback: MotorFeedback::default(),
             leg_phase: [
                 0.0,
                 std::f32::consts::PI,
@@ -233,6 +300,10 @@ impl Ant {
         // T16: dual-channel dopamine (reward/punish) both decay fast.
         self.dopamine_reward *= 0.95;
         self.dopamine_punish *= 0.95;
+        self.eligibility_trace = (self.eligibility_trace * self.genome.mb_eligibility_decay
+            + 0.1
+            + 0.2 * self.contact_signal)
+            .clamp(0.0, 1.0);
         self.octopamine *= 0.99;
         let foraging = matches!(self.state, State::Explore | State::FollowTrail) && !self.carrying;
         if foraging {
@@ -242,7 +313,15 @@ impl Ant {
             self.octopamine = (self.octopamine - crate::genome::OCT_REST_DECAY).max(0.0);
         }
 
+        // CX is a reusable navigation submodule, not a controller-exclusive
+        // storage replacement. Its action evidence is available to every brain
+        // mode when the simulator enables it.
+        self.use_cx = brain_cx;
         let s = sensors::sense(self, world);
+        let code = sensors::encode(self, &s);
+        // Legacy controllers remain comparable, but their heading write is
+        // captured and converted into an explicit descending action command.
+        let decision_heading = self.heading;
         if brain_mb {
             brain::mb_decide(self, &s, world);
         } else if brain_snn {
@@ -253,9 +332,78 @@ impl Ant {
             // T9: FSM framework with CX neural path integration — the FSM
             // reads its home vector through `home_vector()` (cx_hv when
             // use_cx), so only the dead-reckoning module is neuralized.
-            self.use_cx = brain_cx;
             brain::decide(self, &s, world);
         }
+        let legacy_turn = brain::wrap_angle_public(self.heading - decision_heading);
+        self.heading = decision_heading;
+        // Adapt existing controller side effects into the one explicit command.
+        // This preserves legacy behavior exactly while preventing the motor
+        // layer from reading controller-private queues.
+        let mut deposits = [0.0; 4];
+        for (channel, _, _, amount) in self.pending_deposits.drain(..) {
+            let slot = match channel {
+                Channel::Trail => 0,
+                Channel::Home => 1,
+                Channel::Alarm => 2,
+                Channel::Recruitment => 3,
+            };
+            deposits[slot] += amount;
+        }
+        let attack_drive = if self.pending_attacks.is_empty() {
+            0.0
+        } else {
+            1.0
+        };
+        let attacks = std::mem::take(&mut self.pending_attacks);
+        let mut command = ActionCommand {
+            turn_drive: (legacy_turn / self.genome.turn_rate.max(1e-6)).clamp(-1.0, 1.0),
+            speed_drive: 1.0,
+            deposit: deposits,
+            attack_drive,
+            evidence: ActionEvidence {
+                lh_turn: code.lh_turn,
+                mb_approach: if brain_mb { self.mb_out_v[0] } else { 0.0 },
+                mb_avoidance: if brain_mb { self.mb_out_v[3] } else { 0.0 },
+                cx_turn: if self.use_cx {
+                    command_cx_turn(self)
+                } else {
+                    0.0
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Preserve baseline behavior while exposing early-circuit evidence. The
+        // CX-only controller already uses its decoded home vector in the FSM;
+        // its independent readout is retained in telemetry for falsification.
+        // The reusable CX output joins the descending competition explicitly.
+        // It is gated on the same carry/home context as the existing homing
+        // policy, preventing an empty-vector CX bump from steering explorers.
+        if self.use_cx && self.carrying && !self.ablate_cx_motor {
+            command.turn_drive = (command.turn_drive
+                + self.genome.cx_motor_gain * command.evidence.cx_turn)
+                .clamp(-1.0, 1.0);
+        } else {
+            command.turn_drive = command.turn_drive.clamp(-1.0, 1.0);
+        }
+        self.heading += command.turn_drive * self.genome.turn_rate;
+        let ix = self.pos.x as i32;
+        let iy = self.pos.y as i32;
+        for (slot, amount) in command.deposit.into_iter().enumerate() {
+            if amount > 0.0 {
+                let channel = match slot {
+                    0 => Channel::Trail,
+                    1 => Channel::Home,
+                    2 => Channel::Alarm,
+                    _ => Channel::Recruitment,
+                };
+                self.pending_deposits.push((channel, ix, iy, amount));
+            }
+        }
+        if command.attack_drive > 0.0 {
+            self.pending_attacks = attacks;
+        }
+        self.last_command = command;
         // accumulate individual fitness (multi-level selection hook)
         self.total_delivered += self.delivered;
 
@@ -295,10 +443,14 @@ impl Ant {
         // phases advance at `omega` (observable gait), speed scales with it.
         let omega =
             self.genome.cpg_freq * (1.0 + crate::genome::CPG_AROUSAL_GAIN * self.octopamine);
-        let speed = self.genome.max_speed * (omega / self.genome.cpg_freq);
+        let speed = self.genome.max_speed
+            * (omega / self.genome.cpg_freq)
+            * self.last_command.speed_drive.max(0.0)
+            * self.genome.motor_speed_gain;
         self.step_cpg(omega);
         let old_x = self.pos.x;
         let old_y = self.pos.y;
+        let old_heading = self.heading;
         let sign = if self.rng.gen_bool(0.5) { 1.0 } else { -1.0 };
         let mags = [0.5f32, 1.0, 1.5, 2.2];
         let mut deltas: Vec<f32> = vec![0.0];
@@ -336,15 +488,33 @@ impl Ant {
         // and bound reflections), then integrate the step into the neural
         // home vector. Runs after motion so the estimate uses the actual
         // travel direction of this tick.
+        let actual_distance = (self.pos.x - old_x).hypot(self.pos.y - old_y);
+        self.motor_feedback = MotorFeedback {
+            actual_turn: brain::wrap_angle_public(self.heading - old_heading),
+            actual_distance,
+            wall_contact: !moved,
+            energy_cost: drain,
+            gait_phase: self.leg_phase[0],
+        };
         if self.use_cx {
-            let dist = (self.pos.x - old_x).hypot(self.pos.y - old_y);
-            brain::cx_integrate(self, world, dist);
+            brain::cx_integrate_observed(self, world, actual_distance, code.compass);
         }
         if !moved {
             // fully walled in: nudge heading so we don't deadlock
             self.heading += 0.7;
         }
     }
+}
+
+/// Read CX navigation state as a signed, bounded turning suggestion. This is
+/// not applied implicitly: it is recorded inside `ActionCommand.evidence`.
+fn command_cx_turn(ant: &Ant) -> f32 {
+    let (hx, hy) = ant.home_vector();
+    if hx.hypot(hy) < 1e-6 {
+        return 0.0;
+    }
+    let target = (-hy).atan2(-hx);
+    brain::wrap_angle_public(target - ant.heading) / std::f32::consts::PI
 }
 
 pub(crate) fn reflect_bounds(
@@ -400,6 +570,18 @@ mod tests {
             d += std::f32::consts::TAU;
         }
         d
+    }
+
+    #[test]
+    fn action_command_tracks_actual_motor_feedback() {
+        let g = Genome::default();
+        let world = World::new(64, 64, Vec2::new(32.0, 32.0), 4.0);
+        let mut ant = Ant::new(Vec2::new(12.0, 12.0), 0.0, &g, 7);
+        ant.update(&world, false, false, false, false);
+        assert!(ant.last_command.turn_drive.is_finite());
+        assert!(ant.motor_feedback.actual_distance.is_finite());
+        assert!(ant.motor_feedback.actual_distance >= 0.0);
+        assert!(ant.last_command.speed_drive >= 0.0);
     }
 
     #[test]

@@ -91,6 +91,13 @@ fn configure_ablation(sim: &mut sim::Simulator, mechanism: &str, enabled: bool) 
     sim.ablate_stdp = enabled && mechanism == "stdp";
     sim.ablate_reward = enabled && mechanism == "reward";
     sim.ablate_punish = enabled && mechanism == "punish";
+    sim.ablate_al_inhibition = enabled && mechanism == "al_inhibition";
+    sim.ablate_pn_multichannel = enabled && mechanism == "pn_multichannel";
+    sim.ablate_lh_reflex = enabled && mechanism == "lh_reflex";
+    sim.ablate_orn = enabled && mechanism == "orn";
+    sim.ablate_compass = enabled && mechanism == "compass";
+    sim.ablate_cx_motor = enabled && mechanism == "cx_motor";
+    sim.ablate_contact = enabled && mechanism == "contact";
 }
 
 fn run_task_protocol(
@@ -286,6 +293,8 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
     let brain_snn = arg_value(args, "--brain", "fsm") == "snn";
     let brain_mb = arg_value(args, "--brain", "fsm") == "mb";
     let brain_cx = arg_value(args, "--brain", "fsm") == "cx";
+    let use_cx = brain_cx || args.iter().any(|a| a == "--use-cx");
+    let social_contact = args.iter().any(|a| a == "--social-contact");
     let niche = args.iter().any(|a| a == "--niche");
     let novelty = args.iter().any(|a| a == "--novelty");
     let seasonal = args.iter().any(|a| a == "--seasonal");
@@ -694,7 +703,9 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
     }
 
     if args.iter().any(|a| a == "--bench-cx") {
-        // T15.6: CX path-integration fidelity vs Cataglyphis desert-ant literature.
+        // The benchmark distinguishes a zero-noise numeric reference from a
+        // sensory compass condition and an explicit observation occlusion.
+        // It is a model-internal navigation assay, not an animal calibration.
         // Walk the CX ant outbound along a straight bearing for increasing
         // distances, then read the neurally-integrated home vector (cx_hv) and
         // compare its magnitude/direction error to the true displacement. Real
@@ -705,36 +716,46 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         // attractor should match that order of magnitude.
         let g = genome::Genome::default();
         let world = world::World::new(256, 256, world::Vec2::new(128.0, 128.0), 4.0);
-        println!("BENCH-CX (path integration vs Cataglyphis literature)");
+        println!("BENCH-CX (observation-driven path integration)");
         println!("{}", "-".repeat(70));
         println!(
-            "{:<10} {:<14} {:<14} {:<14}",
-            "dist", "hv_mag", "mag_err_%", "dir_err_deg"
+            "{:<12} {:<10} {:<14} {:<14} {:<14}",
+            "condition", "dist", "hv_mag", "mag_err_%", "dir_err_deg"
         );
         println!("{}", "-".repeat(70));
         let stride = 0.5_f32;
-        for &dist in &[10.0_f32, 20.0, 40.0, 80.0] {
-            let mut ant = ant::Ant::new(world::Vec2::new(0.0, 0.0), 0.0, &g, 99);
-            ant.use_cx = true;
-            ant.cx_prev_heading = 0.0;
-            let n = (dist / stride) as usize;
-            for _ in 0..n {
-                ant::brain::cx_integrate(&mut ant, &world, stride);
+        for &(label, noise, occlude) in &[
+            ("reference", 0.0, false),
+            ("noisy", 0.20, false),
+            ("occluded", 0.0, true),
+        ] {
+            for &dist in &[10.0_f32, 20.0, 40.0, 80.0] {
+                let mut ant = ant::Ant::new(world::Vec2::new(0.0, 0.0), 0.0, &g, 99);
+                ant.use_cx = true;
+                ant.cx_prev_heading = 0.0;
+                let n = (dist / stride) as usize;
+                for step in 0..n {
+                    let available = !occlude || step < n / 3 || step >= 2 * n / 3;
+                    let compass = ant::sensors::CompassObservation {
+                        bearing: noise * ((step as f32 * 1.73).sin()),
+                        confidence: if available { 1.0 } else { 0.0 },
+                        available,
+                    };
+                    ant::brain::cx_integrate_observed(&mut ant, &world, stride, compass);
+                }
+                let mag = ant.cx_hv_x.hypot(ant.cx_hv_y);
+                let mag_err = ((mag - dist) / dist).abs() * 100.0;
+                let dir_err = ant.cx_hv_y.atan2(ant.cx_hv_x).to_degrees().abs();
+                println!(
+                    "{:<12} {:<10.1} {:<14.2} {:<14.1} {:<14.1}",
+                    label, dist, mag, mag_err, dir_err
+                );
             }
-            let mag = ant.cx_hv_x.hypot(ant.cx_hv_y);
-            let mag_err = ((mag - dist) / dist).abs() * 100.0;
-            let dir_err = ant.cx_hv_y.atan2(ant.cx_hv_x).to_degrees().abs();
-            println!(
-                "{:<10.1} {:<14.2} {:<14.1} {:<14.1}",
-                dist, mag, mag_err, dir_err
-            );
         }
         println!("{}", "-".repeat(70));
-        println!("literature (Cataglyphis fortis, Wehner & Muller): PI homing error");
-        println!("  scales ~linearly with distance (~5-15% drift, distance often");
-        println!("  underestimated); angular error a few degrees.");
-        println!("  model: leak-integrated ring attractor -> magnitude drifts with");
-        println!("  distance, direction stays tight -> same qualitative scaling.");
+        println!("reference uses a perfect observation; noisy and occluded rows use only");
+        println!("the provided CompassObservation plus motor feedback. Compare conditions,");
+        println!("rather than treating any absolute error as an animal fit.");
         return Ok(());
     }
 
@@ -1470,6 +1491,13 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             "stdp",
             "reward",
             "punish",
+            "al_inhibition",
+            "pn_multichannel",
+            "lh_reflex",
+            "orn",
+            "compass",
+            "cx_motor",
+            "contact",
         ];
         if !known.contains(&mech.as_str()) {
             anyhow::bail!(
@@ -2385,7 +2413,8 @@ draw();
     sim.brain_ann = brain_ann || brain_cppn;
     sim.brain_snn = brain_snn;
     sim.brain_mb = brain_mb;
-    sim.brain_cx = brain_cx;
+    sim.brain_cx = use_cx;
+    sim.social_contact = social_contact;
     if brain_cppn {
         for a in sim.ants.iter_mut() {
             a.genome.ann_weights = crate::genome::develop_phenotype(&a.genome);

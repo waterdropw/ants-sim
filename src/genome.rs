@@ -98,6 +98,55 @@ pub struct Genome {
     pub cx_shift_gain: f32,
     /// home-vector integrator leak per tick (CPU4 analog memory decay)
     pub cx_hv_leak: f32,
+
+    // --- sensory, action and social loop (neural architecture phases 1–5) ---
+    #[serde(default = "default_sensory_adapt_rate")]
+    pub sensory_adapt_rate: f32,
+    #[serde(default = "default_sensory_adapt_strength")]
+    pub sensory_adapt_strength: f32,
+    #[serde(default)]
+    pub sensory_noise: f32,
+    #[serde(default = "default_al_inhibition")]
+    pub al_inhibition: f32,
+    #[serde(default)]
+    pub compass_noise: f32,
+    #[serde(default)]
+    pub compass_bias: f32,
+    #[serde(default = "default_cx_motor_gain")]
+    pub cx_motor_gain: f32,
+    #[serde(default = "default_motor_speed_gain")]
+    pub motor_speed_gain: f32,
+    #[serde(default = "default_social_contact_gain")]
+    pub social_contact_gain: f32,
+    #[serde(default = "default_mb_rpe_lr")]
+    pub mb_rpe_lr: f32,
+    #[serde(default = "default_mb_eligibility_decay")]
+    pub mb_eligibility_decay: f32,
+}
+
+fn default_sensory_adapt_rate() -> f32 {
+    0.08
+}
+fn default_sensory_adapt_strength() -> f32 {
+    0.6
+}
+fn default_al_inhibition() -> f32 {
+    0.25
+}
+fn default_cx_motor_gain() -> f32 {
+    0.6
+}
+fn default_motor_speed_gain() -> f32 {
+    1.0
+}
+fn default_social_contact_gain() -> f32 {
+    0.25
+}
+fn default_mb_rpe_lr() -> f32 {
+    0.01
+}
+fn default_mb_eligibility_decay() -> f32 {
+    0.9
 }
 
 pub const CPPN_GENES: usize = 16;
@@ -285,6 +334,17 @@ impl Default for Genome {
             cx_compass_gain: 0.5,
             cx_shift_gain: 0.85,
             cx_hv_leak: 0.000035,
+            sensory_adapt_rate: default_sensory_adapt_rate(),
+            sensory_adapt_strength: default_sensory_adapt_strength(),
+            sensory_noise: 0.0,
+            al_inhibition: default_al_inhibition(),
+            compass_noise: 0.0,
+            compass_bias: 0.0,
+            cx_motor_gain: default_cx_motor_gain(),
+            motor_speed_gain: default_motor_speed_gain(),
+            social_contact_gain: default_social_contact_gain(),
+            mb_rpe_lr: default_mb_rpe_lr(),
+            mb_eligibility_decay: default_mb_eligibility_decay(),
         }
     }
 }
@@ -455,6 +515,17 @@ impl Genome {
         g.mb_satiety_gain = perturb(rng, g.mb_satiety_gain, 0.0, 1.5, 0.15, 0.4);
         g.mb_neurogenesis = perturb(rng, g.mb_neurogenesis, 0.2, 3.0, 0.15, 0.6);
         g.cpg_freq = perturb(rng, g.cpg_freq, 0.5, 2.0, 0.15, 0.4);
+        g.sensory_adapt_rate = perturb(rng, g.sensory_adapt_rate, 0.0, 0.5, 0.15, 0.4);
+        g.sensory_adapt_strength = perturb(rng, g.sensory_adapt_strength, 0.0, 1.0, 0.15, 0.4);
+        g.sensory_noise = perturb(rng, g.sensory_noise, 0.0, 0.5, 0.15, 0.4);
+        g.al_inhibition = perturb(rng, g.al_inhibition, 0.0, 1.0, 0.15, 0.4);
+        g.compass_noise = perturb(rng, g.compass_noise, 0.0, 1.0, 0.15, 0.4);
+        g.compass_bias = perturb(rng, g.compass_bias, -1.0, 1.0, 0.15, 0.4);
+        g.cx_motor_gain = perturb(rng, g.cx_motor_gain, 0.0, 2.0, 0.15, 0.4);
+        g.motor_speed_gain = perturb(rng, g.motor_speed_gain, 0.2, 2.0, 0.15, 0.4);
+        g.social_contact_gain = perturb(rng, g.social_contact_gain, 0.0, 1.0, 0.15, 0.4);
+        g.mb_rpe_lr = perturb(rng, g.mb_rpe_lr, 0.0, 0.1, 0.15, 0.4);
+        g.mb_eligibility_decay = perturb(rng, g.mb_eligibility_decay, 0.0, 1.0, 0.15, 0.4);
         g
     }
 
@@ -757,11 +828,61 @@ impl Genome {
             mb_satiety_gain: child_satiety_gain,
             mb_neurogenesis: child_neurogenesis,
             cpg_freq: child_cpg_freq,
+            sensory_adapt_rate: blx(
+                rng,
+                self.sensory_adapt_rate,
+                other.sensory_adapt_rate,
+                0.0,
+                0.5,
+                a,
+            ),
+            sensory_adapt_strength: blx(
+                rng,
+                self.sensory_adapt_strength,
+                other.sensory_adapt_strength,
+                0.0,
+                1.0,
+                a,
+            ),
+            sensory_noise: blx(rng, self.sensory_noise, other.sensory_noise, 0.0, 0.5, a),
+            al_inhibition: blx(rng, self.al_inhibition, other.al_inhibition, 0.0, 1.0, a),
+            compass_noise: blx(rng, self.compass_noise, other.compass_noise, 0.0, 1.0, a),
+            compass_bias: blx(rng, self.compass_bias, other.compass_bias, -1.0, 1.0, a),
+            cx_motor_gain: blx(rng, self.cx_motor_gain, other.cx_motor_gain, 0.0, 2.0, a),
+            motor_speed_gain: blx(
+                rng,
+                self.motor_speed_gain,
+                other.motor_speed_gain,
+                0.2,
+                2.0,
+                a,
+            ),
+            social_contact_gain: blx(
+                rng,
+                self.social_contact_gain,
+                other.social_contact_gain,
+                0.0,
+                1.0,
+                a,
+            ),
+            mb_rpe_lr: blx(rng, self.mb_rpe_lr, other.mb_rpe_lr, 0.0, 0.1, a),
+            mb_eligibility_decay: blx(
+                rng,
+                self.mb_eligibility_decay,
+                other.mb_eligibility_decay,
+                0.0,
+                1.0,
+                a,
+            ),
         }
     }
 
-    /// Flattened, normalized trait vector for genotypic distance (niching, T2.4):
-    /// 26 scalar genes normalized to [0,1] by their range + ANN weights + CPPN genes.
+    /// Flattened, normalized trait vector for genotypic distance (niching, T2.4).
+    ///
+    /// It contains every evolvable scalar, followed by canonical-size ANN,
+    /// CPPN, and MB vectors. Missing entries in a malformed legacy genome are
+    /// zero-filled so distance remains symmetric and no inherited parameter is
+    /// silently omitted by a length mismatch.
     pub fn trait_vec(g: &Genome) -> Vec<f32> {
         let r = ranges();
         let scalars = [
@@ -805,11 +926,41 @@ impl Genome {
                 ((s - lo) / (hi - lo).max(1e-9)).clamp(0.0, 1.0)
             })
             .collect();
-        for &w in &g.ann_weights {
+
+        // These neural scalars are evolvable outside `ranges()`, so normalize
+        // them against the exact bounds used by mutate/crossover/in_range.
+        v.extend([
+            ((g.mb_dopamine_reward_gain - 0.1) / 0.9).clamp(0.0, 1.0),
+            ((g.mb_dopamine_punish_gain - 0.1) / 0.9).clamp(0.0, 1.0),
+            (g.mb_satiety_gain / 1.5).clamp(0.0, 1.0),
+            ((g.mb_neurogenesis - 0.2) / 2.8).clamp(0.0, 1.0),
+            ((g.cpg_freq - 0.5) / 1.5).clamp(0.0, 1.0),
+            (g.sensory_adapt_rate / 0.5).clamp(0.0, 1.0),
+            g.sensory_adapt_strength.clamp(0.0, 1.0),
+            (g.sensory_noise / 0.5).clamp(0.0, 1.0),
+            g.al_inhibition.clamp(0.0, 1.0),
+            (g.compass_noise / 1.0).clamp(0.0, 1.0),
+            ((g.compass_bias + 1.0) / 2.0).clamp(0.0, 1.0),
+            (g.cx_motor_gain / 2.0).clamp(0.0, 1.0),
+            ((g.motor_speed_gain - 0.2) / 1.8).clamp(0.0, 1.0),
+            g.social_contact_gain.clamp(0.0, 1.0),
+            (g.mb_rpe_lr / 0.1).clamp(0.0, 1.0),
+            g.mb_eligibility_decay.clamp(0.0, 1.0),
+        ]);
+
+        // Fixed vector dimensions make each inherited neural weight contribute
+        // equally and avoid the previous `min(len_a, len_b)` tail omission.
+        for i in 0..ann_weight_count() {
+            let w = g.ann_weights.get(i).copied().unwrap_or(0.0);
             v.push((w / 8.0).clamp(-1.0, 1.0));
         }
-        for &w in &g.cppn_genes {
-            v.push(w.clamp(-1.0, 1.0));
+        for i in 0..CPPN_GENES {
+            let gene = g.cppn_genes.get(i).copied().unwrap_or(0.0);
+            v.push(gene.clamp(-1.0, 1.0));
+        }
+        for i in 0..mb_weight_count() {
+            let w = g.mb_weights.get(i).copied().unwrap_or(0.0);
+            v.push((w / 8.0).clamp(-1.0, 1.0));
         }
         v
     }
@@ -818,13 +969,13 @@ impl Genome {
     pub fn distance(a: &Genome, b: &Genome) -> f64 {
         let va = Genome::trait_vec(a);
         let vb = Genome::trait_vec(b);
-        let n = va.len().min(vb.len());
+        debug_assert_eq!(va.len(), vb.len(), "trait vectors must be canonical-sized");
         let mut s = 0.0f64;
-        for i in 0..n {
-            let d = (va[i] - vb[i]) as f64;
+        for (av, bv) in va.iter().zip(vb.iter()) {
+            let d = (*av - *bv) as f64;
             s += d * d;
         }
-        s.sqrt() / (n.max(1) as f64).sqrt() // normalized per-dimension
+        s.sqrt() / (va.len().max(1) as f64).sqrt() // normalized per-dimension
     }
 
     /// Random genome within valid ranges (seeds the initial population in C2/C4).
@@ -938,6 +1089,28 @@ impl Genome {
             && self.mb_neurogenesis <= 3.0
             && self.cpg_freq >= 0.5
             && self.cpg_freq <= 2.0
+            && self.sensory_adapt_rate >= 0.0
+            && self.sensory_adapt_rate <= 0.5
+            && self.sensory_adapt_strength >= 0.0
+            && self.sensory_adapt_strength <= 1.0
+            && self.sensory_noise >= 0.0
+            && self.sensory_noise <= 0.5
+            && self.al_inhibition >= 0.0
+            && self.al_inhibition <= 1.0
+            && self.compass_noise >= 0.0
+            && self.compass_noise <= 1.0
+            && self.compass_bias >= -1.0
+            && self.compass_bias <= 1.0
+            && self.cx_motor_gain >= 0.0
+            && self.cx_motor_gain <= 2.0
+            && self.motor_speed_gain >= 0.2
+            && self.motor_speed_gain <= 2.0
+            && self.social_contact_gain >= 0.0
+            && self.social_contact_gain <= 1.0
+            && self.mb_rpe_lr >= 0.0
+            && self.mb_rpe_lr <= 0.1
+            && self.mb_eligibility_decay >= 0.0
+            && self.mb_eligibility_decay <= 1.0
     }
 }
 
@@ -995,6 +1168,57 @@ mod tests {
             Genome::distance(&g, &h) > 1e-6,
             "mutated genome has ~0 distance"
         );
+    }
+
+    #[test]
+    fn distance_includes_every_mb_neural_parameter() {
+        let base = Genome::default();
+        let mut variants = Vec::new();
+
+        let mut reward = base.clone();
+        reward.mb_dopamine_reward_gain = 0.9;
+        variants.push(("reward dopamine gain", reward));
+
+        let mut punish = base.clone();
+        punish.mb_dopamine_punish_gain = 0.9;
+        variants.push(("punish dopamine gain", punish));
+
+        let mut satiety = base.clone();
+        satiety.mb_satiety_gain = 1.2;
+        variants.push(("satiety gain", satiety));
+
+        let mut neurogenesis = base.clone();
+        neurogenesis.mb_neurogenesis = 2.0;
+        variants.push(("neurogenesis", neurogenesis));
+
+        let mut cpg = base.clone();
+        cpg.cpg_freq = 1.5;
+        variants.push(("CPG frequency", cpg));
+
+        let mut mb_weight = base.clone();
+        mb_weight.mb_weights[0] += 1.0;
+        variants.push(("MB weight", mb_weight));
+
+        for (name, variant) in variants {
+            assert!(
+                Genome::distance(&base, &variant) > 1e-6,
+                "{name} must contribute to genotypic distance"
+            );
+        }
+    }
+
+    #[test]
+    fn trait_vec_has_canonical_length_for_malformed_weight_vectors() {
+        let base = Genome::default();
+        let mut malformed = base.clone();
+        malformed.ann_weights.truncate(1);
+        malformed.cppn_genes.truncate(1);
+        malformed.mb_weights.truncate(1);
+        assert_eq!(
+            Genome::trait_vec(&base).len(),
+            Genome::trait_vec(&malformed).len()
+        );
+        assert!(Genome::distance(&base, &malformed) > 1e-6);
     }
 
     #[test]
