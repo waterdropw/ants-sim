@@ -24,8 +24,8 @@ pub struct Genome {
     pub alarm_threshold: f32,
 
     // --- behaviour ---
-    pub explore_rate: f32,     // random-walk jitter (Explore state)
-    pub follow_strength: f32,  // how strongly trail gradient biases heading
+    pub explore_rate: f32,    // random-walk jitter (Explore state)
+    pub follow_strength: f32, // how strongly trail gradient biases heading
     pub aggression: f32,
     pub carry_threshold: f32,
     pub task_switch_threshold: f32,
@@ -46,10 +46,10 @@ pub struct Genome {
     pub trail_reinforcement: f32, // local reinforcement rate when on a good trail
 
     // --- energy economics (T2.1; was constants) ---
-    pub energy_drain: f32,   // base metabolism per tick
+    pub energy_drain: f32,  // base metabolism per tick
     pub carry_cost: f32,    // extra per tick while carrying food
     pub defend_cost: f32,   // extra per tick while defending/alarmed
-    pub recharge_rate: f32,  // energy regained per tick at the nest (not carrying)
+    pub recharge_rate: f32, // energy regained per tick at the nest (not carrying)
 
     // --- ANN decision layer (T2.2); used only in --brain ann mode ---
     /// Flat weight vector for a fixed-topology MLP (IN→HID→OUT). Layout:
@@ -152,12 +152,12 @@ pub const MB_KC_INIT: usize = 24;
 // (0,2,4) swing together, odd legs (1,3,5) anti-phase. The phase relationship
 // is hardwired (CPG half-center output); frequency is octopamine-modulated.
 pub const CPG_LEGS: usize = 6;
-pub const CPG_AROUSAL_GAIN: f32 = 0.3;  // octopamine → gait-frequency gain
+pub const CPG_AROUSAL_GAIN: f32 = 0.3; // octopamine → gait-frequency gain
 
 // T11 neuromodulator dynamics (motivation/emotion, experience-driven)
-pub const OCT_FORAGE_GAIN: f32 = 0.02;  // octopamine rise/tick during active foraging
-pub const OCT_REST_DECAY: f32 = 0.03;   // octopamine fall/tick while carrying/resting
-pub const OCT_MAX: f32 = 1.0;           // arousal ceiling
+pub const OCT_FORAGE_GAIN: f32 = 0.02; // octopamine rise/tick during active foraging
+pub const OCT_REST_DECAY: f32 = 0.03; // octopamine fall/tick while carrying/resting
+pub const OCT_MAX: f32 = 1.0; // arousal ceiling
 
 // T9 central complex: ring-attractor heading units (≤32 for perf).
 pub const CX_N: usize = 16;
@@ -169,7 +169,7 @@ pub fn mb_weight_count() -> usize {
     + MB_AL_GLOM * MB_KC       // W_kc: AL→KC projection
     + MB_KC                    // b_kc
     + MB_KC * MB_OUT           // W_out: KC→output
-    + MB_OUT                   // b_out
+    + MB_OUT // b_out
 }
 
 pub fn ann_weight_count() -> usize {
@@ -222,7 +222,7 @@ pub fn foraging_ann_seed() -> Vec<f32> {
     let b1 = ANN_IN * ANN_HID; // offset of b1
     let w2 = b1 + ANN_HID; // offset of W2
     let b2 = w2 + ANN_HID * ANN_OUT; // offset of b2
-    // W1: identity (hidden[h] ≈ tanh(x[h]))
+                                     // W1: identity (hidden[h] ≈ tanh(x[h]))
     for h in 0..ANN_HID.min(ANN_IN) {
         w[h * ANN_IN + h] = 1.0;
     }
@@ -379,16 +379,46 @@ impl Genome {
         g.follow_strength = perturb(rng, g.follow_strength, at(9).0, at(9).1, at(9).2, 0.4);
         g.aggression = perturb(rng, g.aggression, at(10).0, at(10).1, at(10).2, 0.4);
         g.carry_threshold = perturb(rng, g.carry_threshold, at(11).0, at(11).1, at(11).2, 0.4);
-        g.task_switch_threshold = perturb(rng, g.task_switch_threshold, at(12).0, at(12).1, at(12).2, 0.4);
-        g.trail_release_rate = perturb(rng, g.trail_release_rate, at(13).0, at(13).1, at(13).2, 0.4);
+        g.task_switch_threshold = perturb(
+            rng,
+            g.task_switch_threshold,
+            at(12).0,
+            at(12).1,
+            at(12).2,
+            0.4,
+        );
+        g.trail_release_rate =
+            perturb(rng, g.trail_release_rate, at(13).0, at(13).1, at(13).2, 0.4);
         g.trail_decay = perturb(rng, g.trail_decay, at(14).0, at(14).1, at(14).2, 0.4);
-        g.alarm_release_rate = perturb(rng, g.alarm_release_rate, at(15).0, at(15).1, at(15).2, 0.4);
+        g.alarm_release_rate =
+            perturb(rng, g.alarm_release_rate, at(15).0, at(15).1, at(15).2, 0.4);
         g.alarm_decay = perturb(rng, g.alarm_decay, at(16).0, at(16).1, at(16).2, 0.4);
         g.home_release_rate = perturb(rng, g.home_release_rate, at(17).0, at(17).1, at(17).2, 0.4);
-        g.exploration_baseline = perturb(rng, g.exploration_baseline, at(18).0, at(18).1, at(18).2, 0.4);
-        g.aggression_baseline = perturb(rng, g.aggression_baseline, at(19).0, at(19).1, at(19).2, 0.4);
+        g.exploration_baseline = perturb(
+            rng,
+            g.exploration_baseline,
+            at(18).0,
+            at(18).1,
+            at(18).2,
+            0.4,
+        );
+        g.aggression_baseline = perturb(
+            rng,
+            g.aggression_baseline,
+            at(19).0,
+            at(19).1,
+            at(19).2,
+            0.4,
+        );
         g.task_bias = perturb(rng, g.task_bias, at(20).0, at(20).1, at(20).2, 0.4);
-        g.trail_reinforcement = perturb(rng, g.trail_reinforcement, at(21).0, at(21).1, at(21).2, 0.4);
+        g.trail_reinforcement = perturb(
+            rng,
+            g.trail_reinforcement,
+            at(21).0,
+            at(21).1,
+            at(21).2,
+            0.4,
+        );
         g.energy_drain = perturb(rng, g.energy_drain, at(22).0, at(22).1, at(22).2, 0.4);
         g.carry_cost = perturb(rng, g.carry_cost, at(23).0, at(23).1, at(23).2, 0.4);
         g.defend_cost = perturb(rng, g.defend_cost, at(24).0, at(24).1, at(24).2, 0.4);
@@ -458,43 +488,267 @@ impl Genome {
             let ov = other.mb_weights.get(i).copied().unwrap_or(0.0);
             child_mb[i] = blx(rng, sv, ov, ANN_W_MIN, ANN_W_MAX, a);
         }
-        let child_dopamine_reward_gain = blx(rng, self.mb_dopamine_reward_gain, other.mb_dopamine_reward_gain, 0.1, 1.0, a);
-        let child_dopamine_punish_gain = blx(rng, self.mb_dopamine_punish_gain, other.mb_dopamine_punish_gain, 0.1, 1.0, a);
-        let child_satiety_gain = blx(rng, self.mb_satiety_gain, other.mb_satiety_gain, 0.0, 1.5, a);
-        let child_neurogenesis = blx(rng, self.mb_neurogenesis, other.mb_neurogenesis, 0.2, 3.0, a);
+        let child_dopamine_reward_gain = blx(
+            rng,
+            self.mb_dopamine_reward_gain,
+            other.mb_dopamine_reward_gain,
+            0.1,
+            1.0,
+            a,
+        );
+        let child_dopamine_punish_gain = blx(
+            rng,
+            self.mb_dopamine_punish_gain,
+            other.mb_dopamine_punish_gain,
+            0.1,
+            1.0,
+            a,
+        );
+        let child_satiety_gain = blx(
+            rng,
+            self.mb_satiety_gain,
+            other.mb_satiety_gain,
+            0.0,
+            1.5,
+            a,
+        );
+        let child_neurogenesis = blx(
+            rng,
+            self.mb_neurogenesis,
+            other.mb_neurogenesis,
+            0.2,
+            3.0,
+            a,
+        );
         let child_cpg_freq = blx(rng, self.cpg_freq, other.cpg_freq, 0.5, 2.0, a);
         Genome {
             max_speed: blx(rng, self.max_speed, other.max_speed, at(0).0, at(0).1, a),
             turn_rate: blx(rng, self.turn_rate, other.turn_rate, at(1).0, at(1).1, a),
-            food_radius: blx(rng, self.food_radius, other.food_radius, at(2).0, at(2).1, a),
-            nest_radius: blx(rng, self.nest_radius, other.nest_radius, at(3).0, at(3).1, a),
-            antenna_angle: blx(rng, self.antenna_angle, other.antenna_angle, at(4).0, at(4).1, a),
-            antenna_dist: blx(rng, self.antenna_dist, other.antenna_dist, at(5).0, at(5).1, a),
-            trail_threshold: blx(rng, self.trail_threshold, other.trail_threshold, at(6).0, at(6).1, a),
-            alarm_threshold: blx(rng, self.alarm_threshold, other.alarm_threshold, at(7).0, at(7).1, a),
-            explore_rate: blx(rng, self.explore_rate, other.explore_rate, at(8).0, at(8).1, a),
-            follow_strength: blx(rng, self.follow_strength, other.follow_strength, at(9).0, at(9).1, a),
-            aggression: blx(rng, self.aggression, other.aggression, at(10).0, at(10).1, a),
-            carry_threshold: blx(rng, self.carry_threshold, other.carry_threshold, at(11).0, at(11).1, a),
-            task_switch_threshold: blx(rng, self.task_switch_threshold, other.task_switch_threshold, at(12).0, at(12).1, a),
-            trail_release_rate: blx(rng, self.trail_release_rate, other.trail_release_rate, at(13).0, at(13).1, a),
-            trail_decay: blx(rng, self.trail_decay, other.trail_decay, at(14).0, at(14).1, a),
-            alarm_release_rate: blx(rng, self.alarm_release_rate, other.alarm_release_rate, at(15).0, at(15).1, a),
-            alarm_decay: blx(rng, self.alarm_decay, other.alarm_decay, at(16).0, at(16).1, a),
-            home_release_rate: blx(rng, self.home_release_rate, other.home_release_rate, at(17).0, at(17).1, a),
-            exploration_baseline: blx(rng, self.exploration_baseline, other.exploration_baseline, at(18).0, at(18).1, a),
-            aggression_baseline: blx(rng, self.aggression_baseline, other.aggression_baseline, at(19).0, at(19).1, a),
+            food_radius: blx(
+                rng,
+                self.food_radius,
+                other.food_radius,
+                at(2).0,
+                at(2).1,
+                a,
+            ),
+            nest_radius: blx(
+                rng,
+                self.nest_radius,
+                other.nest_radius,
+                at(3).0,
+                at(3).1,
+                a,
+            ),
+            antenna_angle: blx(
+                rng,
+                self.antenna_angle,
+                other.antenna_angle,
+                at(4).0,
+                at(4).1,
+                a,
+            ),
+            antenna_dist: blx(
+                rng,
+                self.antenna_dist,
+                other.antenna_dist,
+                at(5).0,
+                at(5).1,
+                a,
+            ),
+            trail_threshold: blx(
+                rng,
+                self.trail_threshold,
+                other.trail_threshold,
+                at(6).0,
+                at(6).1,
+                a,
+            ),
+            alarm_threshold: blx(
+                rng,
+                self.alarm_threshold,
+                other.alarm_threshold,
+                at(7).0,
+                at(7).1,
+                a,
+            ),
+            explore_rate: blx(
+                rng,
+                self.explore_rate,
+                other.explore_rate,
+                at(8).0,
+                at(8).1,
+                a,
+            ),
+            follow_strength: blx(
+                rng,
+                self.follow_strength,
+                other.follow_strength,
+                at(9).0,
+                at(9).1,
+                a,
+            ),
+            aggression: blx(
+                rng,
+                self.aggression,
+                other.aggression,
+                at(10).0,
+                at(10).1,
+                a,
+            ),
+            carry_threshold: blx(
+                rng,
+                self.carry_threshold,
+                other.carry_threshold,
+                at(11).0,
+                at(11).1,
+                a,
+            ),
+            task_switch_threshold: blx(
+                rng,
+                self.task_switch_threshold,
+                other.task_switch_threshold,
+                at(12).0,
+                at(12).1,
+                a,
+            ),
+            trail_release_rate: blx(
+                rng,
+                self.trail_release_rate,
+                other.trail_release_rate,
+                at(13).0,
+                at(13).1,
+                a,
+            ),
+            trail_decay: blx(
+                rng,
+                self.trail_decay,
+                other.trail_decay,
+                at(14).0,
+                at(14).1,
+                a,
+            ),
+            alarm_release_rate: blx(
+                rng,
+                self.alarm_release_rate,
+                other.alarm_release_rate,
+                at(15).0,
+                at(15).1,
+                a,
+            ),
+            alarm_decay: blx(
+                rng,
+                self.alarm_decay,
+                other.alarm_decay,
+                at(16).0,
+                at(16).1,
+                a,
+            ),
+            home_release_rate: blx(
+                rng,
+                self.home_release_rate,
+                other.home_release_rate,
+                at(17).0,
+                at(17).1,
+                a,
+            ),
+            exploration_baseline: blx(
+                rng,
+                self.exploration_baseline,
+                other.exploration_baseline,
+                at(18).0,
+                at(18).1,
+                a,
+            ),
+            aggression_baseline: blx(
+                rng,
+                self.aggression_baseline,
+                other.aggression_baseline,
+                at(19).0,
+                at(19).1,
+                a,
+            ),
             task_bias: blx(rng, self.task_bias, other.task_bias, at(20).0, at(20).1, a),
-            trail_reinforcement: blx(rng, self.trail_reinforcement, other.trail_reinforcement, at(21).0, at(21).1, a),
-            energy_drain: blx(rng, self.energy_drain, other.energy_drain, at(22).0, at(22).1, a),
-            carry_cost: blx(rng, self.carry_cost, other.carry_cost, at(23).0, at(23).1, a),
-            defend_cost: blx(rng, self.defend_cost, other.defend_cost, at(24).0, at(24).1, a),
-            recharge_rate: blx(rng, self.recharge_rate, other.recharge_rate, at(25).0, at(25).1, a),
-            cx_bump_gain: blx(rng, self.cx_bump_gain, other.cx_bump_gain, at(26).0, at(26).1, a),
-            cx_inhibition: blx(rng, self.cx_inhibition, other.cx_inhibition, at(27).0, at(27).1, a),
-            cx_compass_gain: blx(rng, self.cx_compass_gain, other.cx_compass_gain, at(28).0, at(28).1, a),
-            cx_shift_gain: blx(rng, self.cx_shift_gain, other.cx_shift_gain, at(29).0, at(29).1, a),
-            cx_hv_leak: blx(rng, self.cx_hv_leak, other.cx_hv_leak, at(30).0, at(30).1, a),
+            trail_reinforcement: blx(
+                rng,
+                self.trail_reinforcement,
+                other.trail_reinforcement,
+                at(21).0,
+                at(21).1,
+                a,
+            ),
+            energy_drain: blx(
+                rng,
+                self.energy_drain,
+                other.energy_drain,
+                at(22).0,
+                at(22).1,
+                a,
+            ),
+            carry_cost: blx(
+                rng,
+                self.carry_cost,
+                other.carry_cost,
+                at(23).0,
+                at(23).1,
+                a,
+            ),
+            defend_cost: blx(
+                rng,
+                self.defend_cost,
+                other.defend_cost,
+                at(24).0,
+                at(24).1,
+                a,
+            ),
+            recharge_rate: blx(
+                rng,
+                self.recharge_rate,
+                other.recharge_rate,
+                at(25).0,
+                at(25).1,
+                a,
+            ),
+            cx_bump_gain: blx(
+                rng,
+                self.cx_bump_gain,
+                other.cx_bump_gain,
+                at(26).0,
+                at(26).1,
+                a,
+            ),
+            cx_inhibition: blx(
+                rng,
+                self.cx_inhibition,
+                other.cx_inhibition,
+                at(27).0,
+                at(27).1,
+                a,
+            ),
+            cx_compass_gain: blx(
+                rng,
+                self.cx_compass_gain,
+                other.cx_compass_gain,
+                at(28).0,
+                at(28).1,
+                a,
+            ),
+            cx_shift_gain: blx(
+                rng,
+                self.cx_shift_gain,
+                other.cx_shift_gain,
+                at(29).0,
+                at(29).1,
+                a,
+            ),
+            cx_hv_leak: blx(
+                rng,
+                self.cx_hv_leak,
+                other.cx_hv_leak,
+                at(30).0,
+                at(30).1,
+                a,
+            ),
             ann_weights: child_ann,
             cppn_genes: child_cppn,
             mb_weights: child_mb,
@@ -506,91 +760,114 @@ impl Genome {
         }
     }
 
-/// Flattened, normalized trait vector for genotypic distance (niching, T2.4):
-/// 26 scalar genes normalized to [0,1] by their range + ANN weights + CPPN genes.
-pub fn trait_vec(g: &Genome) -> Vec<f32> {
-    let r = ranges();
-    let scalars = [
-        g.max_speed, g.turn_rate, g.food_radius, g.nest_radius,
-        g.antenna_angle, g.antenna_dist, g.trail_threshold, g.alarm_threshold,
-        g.explore_rate, g.follow_strength, g.aggression, g.carry_threshold,
-        g.task_switch_threshold, g.trail_release_rate, g.trail_decay,
-        g.alarm_release_rate, g.alarm_decay, g.home_release_rate,
-        g.exploration_baseline, g.aggression_baseline, g.task_bias,
-        g.trail_reinforcement,
-        g.energy_drain, g.carry_cost, g.defend_cost, g.recharge_rate,
-        g.cx_bump_gain, g.cx_inhibition, g.cx_compass_gain, g.cx_shift_gain,
-        g.cx_hv_leak,
-    ];
-    let mut v: Vec<f32> = scalars
-        .iter()
-        .enumerate()
-        .map(|(i, &s)| {
-            let (lo, hi, _) = r[i].1;
-            ((s - lo) / (hi - lo).max(1e-9)).clamp(0.0, 1.0)
-        })
-        .collect();
-    for &w in &g.ann_weights {
-        v.push((w / 8.0).clamp(-1.0, 1.0));
+    /// Flattened, normalized trait vector for genotypic distance (niching, T2.4):
+    /// 26 scalar genes normalized to [0,1] by their range + ANN weights + CPPN genes.
+    pub fn trait_vec(g: &Genome) -> Vec<f32> {
+        let r = ranges();
+        let scalars = [
+            g.max_speed,
+            g.turn_rate,
+            g.food_radius,
+            g.nest_radius,
+            g.antenna_angle,
+            g.antenna_dist,
+            g.trail_threshold,
+            g.alarm_threshold,
+            g.explore_rate,
+            g.follow_strength,
+            g.aggression,
+            g.carry_threshold,
+            g.task_switch_threshold,
+            g.trail_release_rate,
+            g.trail_decay,
+            g.alarm_release_rate,
+            g.alarm_decay,
+            g.home_release_rate,
+            g.exploration_baseline,
+            g.aggression_baseline,
+            g.task_bias,
+            g.trail_reinforcement,
+            g.energy_drain,
+            g.carry_cost,
+            g.defend_cost,
+            g.recharge_rate,
+            g.cx_bump_gain,
+            g.cx_inhibition,
+            g.cx_compass_gain,
+            g.cx_shift_gain,
+            g.cx_hv_leak,
+        ];
+        let mut v: Vec<f32> = scalars
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| {
+                let (lo, hi, _) = r[i].1;
+                ((s - lo) / (hi - lo).max(1e-9)).clamp(0.0, 1.0)
+            })
+            .collect();
+        for &w in &g.ann_weights {
+            v.push((w / 8.0).clamp(-1.0, 1.0));
+        }
+        for &w in &g.cppn_genes {
+            v.push(w.clamp(-1.0, 1.0));
+        }
+        v
     }
-    for &w in &g.cppn_genes {
-        v.push(w.clamp(-1.0, 1.0));
-    }
-    v
-}
 
-/// Euclidean genotypic distance between two genomes (niching).
-pub fn distance(a: &Genome, b: &Genome) -> f64 {
-    let va = Genome::trait_vec(a);
-    let vb = Genome::trait_vec(b);
-    let n = va.len().min(vb.len());
-    let mut s = 0.0f64;
-    for i in 0..n {
-        let d = (va[i] - vb[i]) as f64;
-        s += d * d;
+    /// Euclidean genotypic distance between two genomes (niching).
+    pub fn distance(a: &Genome, b: &Genome) -> f64 {
+        let va = Genome::trait_vec(a);
+        let vb = Genome::trait_vec(b);
+        let n = va.len().min(vb.len());
+        let mut s = 0.0f64;
+        for i in 0..n {
+            let d = (va[i] - vb[i]) as f64;
+            s += d * d;
+        }
+        s.sqrt() / (n.max(1) as f64).sqrt() // normalized per-dimension
     }
-    s.sqrt() / (n.max(1) as f64).sqrt() // normalized per-dimension
-}
 
-/// Random genome within valid ranges (seeds the initial population in C2/C4).
+    /// Random genome within valid ranges (seeds the initial population in C2/C4).
     pub fn random(rng: &mut impl Rng) -> Self {
         let r = ranges();
         let mut g = Genome::default();
-        g.max_speed = rng.gen_range(r[0].1.0..=r[0].1.1);
-        g.turn_rate = rng.gen_range(r[1].1.0..=r[1].1.1);
-        g.food_radius = rng.gen_range(r[2].1.0..=r[2].1.1);
-        g.nest_radius = rng.gen_range(r[3].1.0..=r[3].1.1);
-        g.antenna_angle = rng.gen_range(r[4].1.0..=r[4].1.1);
-        g.antenna_dist = rng.gen_range(r[5].1.0..=r[5].1.1);
-        g.trail_threshold = rng.gen_range(r[6].1.0..=r[6].1.1);
-        g.alarm_threshold = rng.gen_range(r[7].1.0..=r[7].1.1);
-        g.explore_rate = rng.gen_range(r[8].1.0..=r[8].1.1);
-        g.follow_strength = rng.gen_range(r[9].1.0..=r[9].1.1);
-        g.aggression = rng.gen_range(r[10].1.0..=r[10].1.1);
-        g.carry_threshold = rng.gen_range(r[11].1.0..=r[11].1.1);
-        g.task_switch_threshold = rng.gen_range(r[12].1.0..=r[12].1.1);
-        g.trail_release_rate = rng.gen_range(r[13].1.0..=r[13].1.1);
-        g.trail_decay = rng.gen_range(r[14].1.0..=r[14].1.1);
-        g.alarm_release_rate = rng.gen_range(r[15].1.0..=r[15].1.1);
-        g.alarm_decay = rng.gen_range(r[16].1.0..=r[16].1.1);
-        g.home_release_rate = rng.gen_range(r[17].1.0..=r[17].1.1);
-        g.exploration_baseline = rng.gen_range(r[18].1.0..=r[18].1.1);
-        g.aggression_baseline = rng.gen_range(r[19].1.0..=r[19].1.1);
-        g.task_bias = rng.gen_range(r[20].1.0..=r[20].1.1);
-        g.trail_reinforcement = rng.gen_range(r[21].1.0..=r[21].1.1);
-        g.energy_drain = rng.gen_range(r[22].1.0..=r[22].1.1);
-        g.carry_cost = rng.gen_range(r[23].1.0..=r[23].1.1);
-        g.defend_cost = rng.gen_range(r[24].1.0..=r[24].1.1);
-        g.recharge_rate = rng.gen_range(r[25].1.0..=r[25].1.1);
-        g.cx_bump_gain = rng.gen_range(r[26].1.0..=r[26].1.1);
-        g.cx_inhibition = rng.gen_range(r[27].1.0..=r[27].1.1);
-        g.cx_compass_gain = rng.gen_range(r[28].1.0..=r[28].1.1);
-        g.cx_shift_gain = rng.gen_range(r[29].1.0..=r[29].1.1);
-        g.cx_hv_leak = rng.gen_range(r[30].1.0..=r[30].1.1);
+        g.max_speed = rng.gen_range(r[0].1 .0..=r[0].1 .1);
+        g.turn_rate = rng.gen_range(r[1].1 .0..=r[1].1 .1);
+        g.food_radius = rng.gen_range(r[2].1 .0..=r[2].1 .1);
+        g.nest_radius = rng.gen_range(r[3].1 .0..=r[3].1 .1);
+        g.antenna_angle = rng.gen_range(r[4].1 .0..=r[4].1 .1);
+        g.antenna_dist = rng.gen_range(r[5].1 .0..=r[5].1 .1);
+        g.trail_threshold = rng.gen_range(r[6].1 .0..=r[6].1 .1);
+        g.alarm_threshold = rng.gen_range(r[7].1 .0..=r[7].1 .1);
+        g.explore_rate = rng.gen_range(r[8].1 .0..=r[8].1 .1);
+        g.follow_strength = rng.gen_range(r[9].1 .0..=r[9].1 .1);
+        g.aggression = rng.gen_range(r[10].1 .0..=r[10].1 .1);
+        g.carry_threshold = rng.gen_range(r[11].1 .0..=r[11].1 .1);
+        g.task_switch_threshold = rng.gen_range(r[12].1 .0..=r[12].1 .1);
+        g.trail_release_rate = rng.gen_range(r[13].1 .0..=r[13].1 .1);
+        g.trail_decay = rng.gen_range(r[14].1 .0..=r[14].1 .1);
+        g.alarm_release_rate = rng.gen_range(r[15].1 .0..=r[15].1 .1);
+        g.alarm_decay = rng.gen_range(r[16].1 .0..=r[16].1 .1);
+        g.home_release_rate = rng.gen_range(r[17].1 .0..=r[17].1 .1);
+        g.exploration_baseline = rng.gen_range(r[18].1 .0..=r[18].1 .1);
+        g.aggression_baseline = rng.gen_range(r[19].1 .0..=r[19].1 .1);
+        g.task_bias = rng.gen_range(r[20].1 .0..=r[20].1 .1);
+        g.trail_reinforcement = rng.gen_range(r[21].1 .0..=r[21].1 .1);
+        g.energy_drain = rng.gen_range(r[22].1 .0..=r[22].1 .1);
+        g.carry_cost = rng.gen_range(r[23].1 .0..=r[23].1 .1);
+        g.defend_cost = rng.gen_range(r[24].1 .0..=r[24].1 .1);
+        g.recharge_rate = rng.gen_range(r[25].1 .0..=r[25].1 .1);
+        g.cx_bump_gain = rng.gen_range(r[26].1 .0..=r[26].1 .1);
+        g.cx_inhibition = rng.gen_range(r[27].1 .0..=r[27].1 .1);
+        g.cx_compass_gain = rng.gen_range(r[28].1 .0..=r[28].1 .1);
+        g.cx_shift_gain = rng.gen_range(r[29].1 .0..=r[29].1 .1);
+        g.cx_hv_leak = rng.gen_range(r[30].1 .0..=r[30].1 .1);
         let n = ann_weight_count();
         g.ann_weights = (0..n).map(|_| rng.gen_range(-1.0..=1.0)).collect();
         g.cppn_genes = (0..CPPN_GENES).map(|_| rng.gen_range(-1.0..=1.0)).collect();
-        g.mb_weights = (0..mb_weight_count()).map(|_| rng.gen_range(-1.0..=1.0)).collect();
+        g.mb_weights = (0..mb_weight_count())
+            .map(|_| rng.gen_range(-1.0..=1.0))
+            .collect();
         g.mb_dopamine_reward_gain = rng.gen_range(0.2..=0.8);
         g.mb_dopamine_punish_gain = rng.gen_range(0.2..=0.8);
         g.mb_satiety_gain = rng.gen_range(0.0..=1.0);
@@ -604,31 +881,63 @@ pub fn distance(a: &Genome, b: &Genome) -> f64 {
     pub fn in_range(&self) -> bool {
         let r = ranges();
         let vals = [
-            self.max_speed, self.turn_rate, self.food_radius, self.nest_radius,
-            self.antenna_angle, self.antenna_dist, self.trail_threshold, self.alarm_threshold,
-            self.explore_rate, self.follow_strength, self.aggression, self.carry_threshold,
-            self.task_switch_threshold, self.trail_release_rate, self.trail_decay,
-            self.alarm_release_rate, self.alarm_decay, self.home_release_rate,
-            self.exploration_baseline, self.aggression_baseline, self.task_bias,
+            self.max_speed,
+            self.turn_rate,
+            self.food_radius,
+            self.nest_radius,
+            self.antenna_angle,
+            self.antenna_dist,
+            self.trail_threshold,
+            self.alarm_threshold,
+            self.explore_rate,
+            self.follow_strength,
+            self.aggression,
+            self.carry_threshold,
+            self.task_switch_threshold,
+            self.trail_release_rate,
+            self.trail_decay,
+            self.alarm_release_rate,
+            self.alarm_decay,
+            self.home_release_rate,
+            self.exploration_baseline,
+            self.aggression_baseline,
+            self.task_bias,
             self.trail_reinforcement,
-            self.energy_drain, self.carry_cost, self.defend_cost, self.recharge_rate,
-            self.cx_bump_gain, self.cx_inhibition, self.cx_compass_gain,
-            self.cx_shift_gain, self.cx_hv_leak,
+            self.energy_drain,
+            self.carry_cost,
+            self.defend_cost,
+            self.recharge_rate,
+            self.cx_bump_gain,
+            self.cx_inhibition,
+            self.cx_compass_gain,
+            self.cx_shift_gain,
+            self.cx_hv_leak,
         ];
         vals.iter()
             .enumerate()
-            .all(|(i, &v)| v >= r[i].1.0 && v <= r[i].1.1)
+            .all(|(i, &v)| v >= r[i].1 .0 && v <= r[i].1 .1)
             && self.ann_weights.len() == ann_weight_count()
-            && self.ann_weights.iter().all(|&w| w >= ANN_W_MIN && w <= ANN_W_MAX)
+            && self
+                .ann_weights
+                .iter()
+                .all(|&w| w >= ANN_W_MIN && w <= ANN_W_MAX)
             && self.cppn_genes.len() == CPPN_GENES
             && self.cppn_genes.iter().all(|&w| w >= -1.0 && w <= 1.0)
             && self.mb_weights.len() == mb_weight_count()
-            && self.mb_weights.iter().all(|&w| w >= ANN_W_MIN && w <= ANN_W_MAX)
-            && self.mb_dopamine_reward_gain >= 0.1 && self.mb_dopamine_reward_gain <= 1.0
-            && self.mb_dopamine_punish_gain >= 0.1 && self.mb_dopamine_punish_gain <= 1.0
-            && self.mb_satiety_gain >= 0.0 && self.mb_satiety_gain <= 1.5
-            && self.mb_neurogenesis >= 0.2 && self.mb_neurogenesis <= 3.0
-            && self.cpg_freq >= 0.5 && self.cpg_freq <= 2.0
+            && self
+                .mb_weights
+                .iter()
+                .all(|&w| w >= ANN_W_MIN && w <= ANN_W_MAX)
+            && self.mb_dopamine_reward_gain >= 0.1
+            && self.mb_dopamine_reward_gain <= 1.0
+            && self.mb_dopamine_punish_gain >= 0.1
+            && self.mb_dopamine_punish_gain <= 1.0
+            && self.mb_satiety_gain >= 0.0
+            && self.mb_satiety_gain <= 1.5
+            && self.mb_neurogenesis >= 0.2
+            && self.mb_neurogenesis <= 3.0
+            && self.cpg_freq >= 0.5
+            && self.cpg_freq <= 2.0
     }
 }
 
@@ -682,7 +991,10 @@ mod tests {
         assert!(Genome::distance(&g, &g) < 1e-9, "self-distance not ~0");
         let mut r = rng();
         let h = g.mutate(&mut r);
-        assert!(Genome::distance(&g, &h) > 1e-6, "mutated genome has ~0 distance");
+        assert!(
+            Genome::distance(&g, &h) > 1e-6,
+            "mutated genome has ~0 distance"
+        );
     }
 
     #[test]
@@ -738,20 +1050,24 @@ pub fn mb_seed() -> Vec<f32> {
     let set_al = |w: &mut [f32], gl: usize, inp: usize, wt: f32| {
         w[gl * al_in + inp] = wt;
     };
-    set_al(&mut w, 0, 3, 1.0);   // glom0 ← out_steer (outbound trail steer, gated)
-    set_al(&mut w, 1, 15, 1.0);  // glom1 ← in_steer (inbound nest steer)
+    set_al(&mut w, 0, 3, 1.0); // glom0 ← out_steer (outbound trail steer, gated)
+    set_al(&mut w, 1, 15, 1.0); // glom1 ← in_steer (inbound nest steer)
     set_al(&mut w, 2, 12, -1.0); // glom2 ← -c → tanh(b_al - c) = not-carrying detector
-    w[off_b_al + 2] = 1.0;       //   b_al so tanh(1-c): 0.76 when not carrying, 0 when carrying
-    set_al(&mut w, 3, 12, 1.0);  // glom3 ← c (carrying detector)
-    set_al(&mut w, 4, 2, 1.0);   // glom4 ← alarm_val (concentration)
-    set_al(&mut w, 5, 6, 1.0);   // glom5 ← as_ (alarm steer, signed)
-    set_al(&mut w, 6, 1, 1.0);   // glom6 ← home_val
-    set_al(&mut w, 7, 7, 1.0);   // glom7 ← noise (exploration drive)
-    // T10 multi-modal: vision + proximity converge onto glomeruli 8-11.
-    set_al(&mut w, 8, 16, 1.0);  set_al(&mut w, 8, 8, 1.0);   // glom8 ← v_sin + trail_cos
-    set_al(&mut w, 9, 17, 1.0);  set_al(&mut w, 9, 9, 1.0);   // glom9 ← v_cos + nest_cos
-    set_al(&mut w, 10, 18, 1.0); set_al(&mut w, 10, 10, 1.0); // glom10 ← v_prox + alarm_cos
-    set_al(&mut w, 11, 19, 1.0); set_al(&mut w, 11, 11, 1.0); // glom11 ← nest_prox + nc
+    w[off_b_al + 2] = 1.0; //   b_al so tanh(1-c): 0.76 when not carrying, 0 when carrying
+    set_al(&mut w, 3, 12, 1.0); // glom3 ← c (carrying detector)
+    set_al(&mut w, 4, 2, 1.0); // glom4 ← alarm_val (concentration)
+    set_al(&mut w, 5, 6, 1.0); // glom5 ← as_ (alarm steer, signed)
+    set_al(&mut w, 6, 1, 1.0); // glom6 ← home_val
+    set_al(&mut w, 7, 7, 1.0); // glom7 ← noise (exploration drive)
+                               // T10 multi-modal: vision + proximity converge onto glomeruli 8-11.
+    set_al(&mut w, 8, 16, 1.0);
+    set_al(&mut w, 8, 8, 1.0); // glom8 ← v_sin + trail_cos
+    set_al(&mut w, 9, 17, 1.0);
+    set_al(&mut w, 9, 9, 1.0); // glom9 ← v_cos + nest_cos
+    set_al(&mut w, 10, 18, 1.0);
+    set_al(&mut w, 10, 10, 1.0); // glom10 ← v_prox + alarm_cos
+    set_al(&mut w, 11, 19, 1.0);
+    set_al(&mut w, 11, 11, 1.0); // glom11 ← nest_prox + nc
 
     // --- W_lat: small uniform lateral inhibition (contrast / WTA) ---
     for i in 0..al_g {
@@ -785,19 +1101,19 @@ pub fn mb_seed() -> Vec<f32> {
     // out0 readout / STDP substrate; the *behavioural* turn is a graded
     // AL→turn reflex (see mb_decide), so these thresholds only govern STDP
     // spike timing, not the live steering.
-    detector(&mut w, 0, 0, 3.0, -0.3);   // out_L: outbound trail to the left
-    detector(&mut w, 1, 0, -3.0, -0.3);  // out_R: outbound trail to the right
-    detector(&mut w, 2, 1, 3.0, -0.3);   // in_L:  inbound nest to the left
-    detector(&mut w, 3, 1, -3.0, -0.3);  // in_R:  inbound nest to the right
-    // carrying-state detectors (strong signal → b=-0.2, fires reliably)
-    detector(&mut w, 4, 2, 3.0, -0.2);   // not_carrying
-    detector(&mut w, 5, 3, 3.0, -0.2);   // carrying
-    // alarm steer detectors (sign-split)
-    detector(&mut w, 6, 5, 3.0, -0.3);   // alarm_L
-    detector(&mut w, 7, 5, -3.0, -0.3);  // alarm_R
-    // noise detectors (sign-split → symmetric random walk when no trail)
-    detector(&mut w, 8, 7, 3.0, -0.3);   // noise_pos → turn one way
-    detector(&mut w, 9, 7, -3.0, -0.3);  // noise_neg → turn the other
+    detector(&mut w, 0, 0, 3.0, -0.3); // out_L: outbound trail to the left
+    detector(&mut w, 1, 0, -3.0, -0.3); // out_R: outbound trail to the right
+    detector(&mut w, 2, 1, 3.0, -0.3); // in_L:  inbound nest to the left
+    detector(&mut w, 3, 1, -3.0, -0.3); // in_R:  inbound nest to the right
+                                        // carrying-state detectors (strong signal → b=-0.2, fires reliably)
+    detector(&mut w, 4, 2, 3.0, -0.2); // not_carrying
+    detector(&mut w, 5, 3, 3.0, -0.2); // carrying
+                                       // alarm steer detectors (sign-split)
+    detector(&mut w, 6, 5, 3.0, -0.3); // alarm_L
+    detector(&mut w, 7, 5, -3.0, -0.3); // alarm_R
+                                        // noise detectors (sign-split → symmetric random walk when no trail)
+    detector(&mut w, 8, 7, 3.0, -0.3); // noise_pos → turn one way
+    detector(&mut w, 9, 7, -3.0, -0.3); // noise_neg → turn the other
 
     // --- W_out: readout (turn / dep_trail / dep_home / dep_alarm / attack) ---
     let set_out = |w: &mut [f32], o: usize, k: usize, wt: f32| {
@@ -807,17 +1123,21 @@ pub fn mb_seed() -> Vec<f32> {
     // AL→turn reflex in mb_decide (binary KCs can't do proportional steering);
     // this out0 wiring is kept as the STDP substrate so learning can refine
     // the innate reflex's pheromone-state coupling over a lifetime.
-    set_out(&mut w, 0, 0, 2.0);  set_out(&mut w, 0, 1, -2.0);
-    set_out(&mut w, 0, 2, 2.0);  set_out(&mut w, 0, 3, -2.0);
-    set_out(&mut w, 0, 8, 0.4);  set_out(&mut w, 0, 9, -0.4);
+    set_out(&mut w, 0, 0, 2.0);
+    set_out(&mut w, 0, 1, -2.0);
+    set_out(&mut w, 0, 2, 2.0);
+    set_out(&mut w, 0, 3, -2.0);
+    set_out(&mut w, 0, 8, 0.4);
+    set_out(&mut w, 0, 9, -0.4);
     // out1 (dep_trail): carrying → lay Trail on the return leg (ACO).
     set_out(&mut w, 1, 5, 1.0);
     // out2 (dep_home): not carrying → lay Home outbound (gradient back to nest).
     set_out(&mut w, 2, 4, 1.0);
     // out3 (dep_alarm) + out4 (attack): alarm either side → deposit + engage.
-    set_out(&mut w, 3, 6, 1.0);  set_out(&mut w, 3, 7, 1.0);
-    set_out(&mut w, 4, 6, 1.0);  set_out(&mut w, 4, 7, 1.0);
+    set_out(&mut w, 3, 6, 1.0);
+    set_out(&mut w, 3, 7, 1.0);
+    set_out(&mut w, 4, 6, 1.0);
+    set_out(&mut w, 4, 7, 1.0);
 
     w
 }
-

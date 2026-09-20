@@ -1,13 +1,73 @@
 //! Simulator — owns world + ants + RNG, drives one fixed-timestep tick.
 
-use crate::ant::Ant;
+use crate::ant::{Ant, State};
 use crate::genome::Genome;
 use crate::world::spatial_hash::SpatialHash;
-use crate::world::{Vec2, World, Channel};
+use crate::world::{Channel, Vec2, World};
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
+
+/// A vertical counting gate placed on one arm of the two-bridge scenario.
+/// A crossing is counted from an ant's actual movement segment, not from
+/// pheromone concentration, so this is a traffic-flow measurement.
+#[derive(Clone, Copy, Debug)]
+pub struct BridgeGate {
+    pub x: f32,
+    pub y_min: f32,
+    pub y_max: f32,
+}
+
+/// Cumulative movements through the short and long bridge gates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BridgeFlow {
+    pub short_outbound: u64,
+    pub long_outbound: u64,
+    pub short_inbound: u64,
+    pub long_inbound: u64,
+}
+
+impl BridgeFlow {
+    pub fn inbound_total(self) -> u64 {
+        self.short_inbound + self.long_inbound
+    }
+
+    pub fn short_inbound_fraction(self) -> Option<f32> {
+        let total = self.inbound_total();
+        (total > 0).then(|| self.short_inbound as f32 / total as f32)
+    }
+}
+
+/// Time-local allocation of the model's observable behavior states. These are
+/// action labels, not morphological castes or a direct species-level measure.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TaskFractions {
+    pub foraging: f32,
+    pub defense: f32,
+    pub brood_care: f32,
+}
+
+impl TaskFractions {
+    pub fn from_ants(ants: &[Ant]) -> Self {
+        if ants.is_empty() {
+            return Self::default();
+        }
+        let mut result = Self::default();
+        for ant in ants {
+            match ant.state {
+                State::Explore | State::FollowTrail | State::CarryReturn => result.foraging += 1.0,
+                State::Alarm | State::Defend => result.defense += 1.0,
+                State::Nurse => result.brood_care += 1.0,
+            }
+        }
+        let n = ants.len() as f32;
+        result.foraging /= n;
+        result.defense /= n;
+        result.brood_care /= n;
+        result
+    }
+}
 
 pub struct Simulator {
     pub world: World,
@@ -39,10 +99,9 @@ pub struct Simulator {
     pub war: bool,
     /// seasonal/ecological dynamics (T7.7): food regrows, predators raid
     pub seasonal: bool,
-    /// T22: ablation flags (sufficiency/prediction experiments). Each disables
-    /// one mechanism to measure its behavioral consequence — turning "mechanism
-    /// X is sufficient for behavior Y" into a falsifiable prediction mapped to
-    /// a real intervention (OA knockdown / pheromone disruption / nurse removal).
+    /// Counterfactual perturbation flags used to measure model-internal
+    /// sensitivity. They are abstract implementation switches, not one-to-one
+    /// wet-lab interventions or evidence of biological sufficiency.
     pub ablate_octopamine: bool,
     pub ablate_trail: bool,
     pub ablate_eclosion: bool,
@@ -61,6 +120,10 @@ pub struct Simulator {
     /// T22: STDP ablation (plasticity-blockade analog) — propagated to per-ant
     /// flag, mb/snn skip lifetime synaptic plasticity.
     pub ablate_stdp: bool,
+    /// Gates are registered only by the two-bridge scenario.
+    pub bridge_gates: Option<[BridgeGate; 2]>,
+    /// Cumulative actual ant traffic through the registered bridge gates.
+    pub bridge_flow: BridgeFlow,
     pub spatial: SpatialHash,
 }
 
@@ -112,6 +175,8 @@ impl Simulator {
             ablate_punish: false,
             ablate_vision: false,
             ablate_stdp: false,
+            bridge_gates: None,
+            bridge_flow: BridgeFlow::default(),
             spatial: SpatialHash::new(width, height),
         }
     }
@@ -126,6 +191,8 @@ impl Simulator {
         // 2. ant step in parallel. Each ant owns its RNG, and deposits are
         //    queued (not applied inline) so there's no shared mutable field.
         //    Disjoint borrows of self.ants / self.world via a free fn.
+        // Keep positions for serial bridge-gate flow accounting after movement.
+        let previous_positions: Vec<Vec2> = self.ants.iter().map(|a| a.pos).collect();
         // T22 ablation: zero octopamine each tick so the arousal pathway can't
         // drive exploration/vigor/aggression/CPG-speed (OA-knockdown analog).
         if self.ablate_octopamine {
@@ -147,7 +214,15 @@ impl Simulator {
             a.ablate_vision = self.ablate_vision;
             a.ablate_stdp = self.ablate_stdp;
         }
-        step_ants(&mut self.ants, &self.world, self.brain_ann, self.brain_snn, self.brain_mb, self.brain_cx);
+        step_ants(
+            &mut self.ants,
+            &self.world,
+            self.brain_ann,
+            self.brain_snn,
+            self.brain_mb,
+            self.brain_cx,
+        );
+        self.record_bridge_crossings(&previous_positions);
 
         // 3. serial flush: apply deposits + attacks + sum deliveries (race-free).
         if self.source_visits.len() < self.world.food.len() {
@@ -203,13 +278,13 @@ impl Simulator {
             // T22 ablation: skip reward-dopamine release (PAM-silence analog).
             let eff_reward = if self.ablate_reward { 0.0 } else { eff_reward };
             if a.delivered > 0 {
-                a.dopamine_reward = (a.dopamine_reward + eff_reward)
-                    .min(crate::genome::DOPAMINE_MAX);
+                a.dopamine_reward =
+                    (a.dopamine_reward + eff_reward).min(crate::genome::DOPAMINE_MAX);
                 a.grow_mb(a.genome.mb_neurogenesis * a.delivered as f32);
             }
             if a.pending_pickup.is_some() {
-                a.dopamine_reward = (a.dopamine_reward + eff_reward * 0.5)
-                    .min(crate::genome::DOPAMINE_MAX);
+                a.dopamine_reward =
+                    (a.dopamine_reward + eff_reward * 0.5).min(crate::genome::DOPAMINE_MAX);
             }
         }
         // trophallaxis (T7.3): redistribute colony energy to nest ants.
@@ -222,7 +297,9 @@ impl Simulator {
             let rr = self.ants[0].genome.recharge_rate;
             let mut pool = self.colony_energy;
             for a in self.ants.iter_mut() {
-                if pool <= 0.0 { break; }
+                if pool <= 0.0 {
+                    break;
+                }
                 let dx = a.pos.x - nx;
                 let dy = a.pos.y - ny;
                 if dx * dx + dy * dy <= nr2 && a.energy < 1.0 {
@@ -308,8 +385,12 @@ impl Simulator {
             let mut er = ChaCha8Rng::seed_from_u64(self.seed ^ (self.tick * 0xEC10));
             let g = &self.ants[0].genome;
             let na = spawn_ant(
-                self.world.width, self.world.height, g, &mut er,
-                self.seed, self.ants.len() as u64,
+                self.world.width,
+                self.world.height,
+                g,
+                &mut er,
+                self.seed,
+                self.ants.len() as u64,
             );
             self.ants.push(na);
         }
@@ -319,7 +400,7 @@ impl Simulator {
             for f in self.world.food.iter_mut() {
                 f.amount = (f.amount + 0.3).min(300.0); // regrowth, capped
             }
-            if self.tick > 0 && self.tick % 500 == 0 {
+            if self.tick > 0 && self.tick.is_multiple_of(500) {
                 let nest = self.world.nest;
                 let th = (self.tick as f32 * 0.1).sin();
                 let r = self.world.nest_radius + 15.0;
@@ -337,6 +418,31 @@ impl Simulator {
         }
 
         self.tick += 1;
+    }
+
+    /// Record each line-segment crossing through a registered bridge gate.
+    /// The strict half-open direction test prevents repeated counts when an ant
+    /// lands on a gate line for more than one tick.
+    fn record_bridge_crossings(&mut self, previous_positions: &[Vec2]) {
+        let Some([short_gate, long_gate]) = self.bridge_gates else {
+            return;
+        };
+        for (before, ant) in previous_positions.iter().zip(&self.ants) {
+            if crosses_gate(*before, ant.pos, short_gate) {
+                if ant.pos.x > before.x {
+                    self.bridge_flow.short_outbound += 1;
+                } else {
+                    self.bridge_flow.short_inbound += 1;
+                }
+            }
+            if crosses_gate(*before, ant.pos, long_gate) {
+                if ant.pos.x > before.x {
+                    self.bridge_flow.long_outbound += 1;
+                } else {
+                    self.bridge_flow.long_inbound += 1;
+                }
+            }
+        }
     }
 
     pub fn reset(&mut self, seed: u64, genome: &Genome) {
@@ -359,6 +465,16 @@ impl Simulator {
                 i,
             ));
         }
+        let center = Vec2::new(
+            self.world.width as f32 / 2.0,
+            self.world.height as f32 / 2.0,
+        );
+        let dx = self.world.nest.x - center.x;
+        let dy = self.world.nest.y - center.y;
+        for ant in &mut ants {
+            ant.pos.x += dx;
+            ant.pos.y += dy;
+        }
         self.ants = ants;
     }
 
@@ -368,10 +484,31 @@ impl Simulator {
         let mut rng = ChaCha8Rng::seed_from_u64(self.seed ^ 0xC0DE);
         let mut ants = Vec::with_capacity(n);
         for i in 0..n as u64 {
-            let (g, id) = if i % 2 == 0 { (genome_a, 0u8) } else { (genome_b, 1u8) };
-            let mut a = spawn_ant(self.world.width, self.world.height, g, &mut rng, self.seed, i);
+            let (g, id) = if i % 2 == 0 {
+                (genome_a, 0u8)
+            } else {
+                (genome_b, 1u8)
+            };
+            let mut a = spawn_ant(
+                self.world.width,
+                self.world.height,
+                g,
+                &mut rng,
+                self.seed,
+                i,
+            );
             a.colony_id = id;
             ants.push(a);
+        }
+        let center = Vec2::new(
+            self.world.width as f32 / 2.0,
+            self.world.height as f32 / 2.0,
+        );
+        let dx = self.world.nest.x - center.x;
+        let dy = self.world.nest.y - center.y;
+        for ant in &mut ants {
+            ant.pos.x += dx;
+            ant.pos.y += dy;
         }
         self.ants = ants;
     }
@@ -425,6 +562,8 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
+        self.bridge_gates = None;
+        self.bridge_flow = BridgeFlow::default();
     }
 
     /// T1.4 symmetric two-bridge: ONE food on the direct line, a thin vertical
@@ -462,6 +601,22 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
+        // These gates sit after the fork and before the long-route detour.
+        // Their y spans cover the actual wall openings, so counts represent
+        // traffic committed to each route rather than a shared approach corridor.
+        self.bridge_gates = Some([
+            BridgeGate {
+                x: w * 0.33,
+                y_min: 0.0,
+                y_max: h * 0.5 - 24.0,
+            },
+            BridgeGate {
+                x: w * 0.33,
+                y_min: h * 0.5 + 24.0,
+                y_max: h,
+            },
+        ]);
+        self.bridge_flow = BridgeFlow::default();
     }
 
     /// M3 two-source selection: two food sources in divergent directions at
@@ -491,6 +646,8 @@ impl Simulator {
         self.collected = 0.0;
         self.tick = 0;
         self.source_visits.clear();
+        self.bridge_gates = None;
+        self.bridge_flow = BridgeFlow::default();
     }
 
     /// M4: drop an enemy near the nest to trigger alarm + collective defense.
@@ -518,7 +675,24 @@ impl Simulator {
         self.world.field.clear();
         self.collected = 0.0;
         self.tick = 0;
+        self.bridge_gates = None;
+        self.bridge_flow = BridgeFlow::default();
     }
+}
+
+fn crosses_gate(before: Vec2, after: Vec2, gate: BridgeGate) -> bool {
+    let dx = after.x - before.x;
+    if dx.abs() <= f32::EPSILON {
+        return false;
+    }
+    let crosses_outbound = before.x < gate.x && after.x >= gate.x;
+    let crosses_inbound = before.x > gate.x && after.x <= gate.x;
+    if !crosses_outbound && !crosses_inbound {
+        return false;
+    }
+    let t = (gate.x - before.x) / dx;
+    let y = before.y + t * (after.y - before.y);
+    y >= gate.y_min && y <= gate.y_max
 }
 
 fn spawn_ant(
@@ -540,14 +714,22 @@ fn spawn_ant(
         .wrapping_mul(0x9E3779B97F4A7C15)
         .wrapping_add(index.wrapping_mul(0x632BE59BD01B5C35));
     let mut ant = Ant::new(pos, heading, genome, ant_seed);
-    // task-threshold heterogeneity: ~30% guards (jitter<0), rest foragers —
-    // matching the empirical minor-worker fraction. Biased range so P(<0)≈0.3.
+    // Individual age-transition heterogeneity; this is not itself a measured
+    // caste proportion. Task allocation is measured from live State labels.
     ant.task_jitter = rng.gen_range(-0.4..=1.0);
     ant
 }
 
-fn step_ants(ants: &mut [Ant], world: &World, brain_ann: bool, brain_snn: bool, brain_mb: bool, brain_cx: bool) {
-    ants.par_iter_mut().for_each(|a| a.update(world, brain_ann, brain_snn, brain_mb, brain_cx));
+fn step_ants(
+    ants: &mut [Ant],
+    world: &World,
+    brain_ann: bool,
+    brain_snn: bool,
+    brain_mb: bool,
+    brain_cx: bool,
+) {
+    ants.par_iter_mut()
+        .for_each(|a| a.update(world, brain_ann, brain_snn, brain_mb, brain_cx));
 }
 
 #[cfg(test)]
@@ -564,6 +746,76 @@ mod tests {
     }
 
     #[test]
+    fn bridge_gate_counts_segment_crossings_once_by_direction() {
+        let gate = BridgeGate {
+            x: 10.0,
+            y_min: 2.0,
+            y_max: 4.0,
+        };
+        assert!(crosses_gate(
+            Vec2::new(9.0, 3.0),
+            Vec2::new(11.0, 3.0),
+            gate
+        ));
+        assert!(crosses_gate(
+            Vec2::new(11.0, 3.0),
+            Vec2::new(9.0, 3.0),
+            gate
+        ));
+        assert!(!crosses_gate(
+            Vec2::new(9.0, 5.0),
+            Vec2::new(11.0, 5.0),
+            gate
+        ));
+        assert!(!crosses_gate(
+            Vec2::new(10.0, 3.0),
+            Vec2::new(11.0, 3.0),
+            gate
+        ));
+        assert!(!crosses_gate(
+            Vec2::new(9.0, 3.0),
+            Vec2::new(9.0, 4.0),
+            gate
+        ));
+    }
+
+    #[test]
+    fn task_fractions_use_live_states_not_task_jitter() {
+        let mut simulator = sim_two(12);
+        simulator.ants.truncate(6);
+        let states = [
+            State::Explore,
+            State::FollowTrail,
+            State::CarryReturn,
+            State::Alarm,
+            State::Defend,
+            State::Nurse,
+        ];
+        for (ant, state) in simulator.ants.iter_mut().zip(states) {
+            ant.state = state;
+            ant.task_jitter = 123.0;
+        }
+        let tasks = TaskFractions::from_ants(&simulator.ants);
+        assert!((tasks.foraging - 0.5).abs() < 1e-6);
+        assert!((tasks.defense - 1.0 / 3.0).abs() < 1e-6);
+        assert!((tasks.brood_care - 1.0 / 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn two_bridge_registers_disjoint_arm_gates() {
+        let g = Genome::default();
+        let mut simulator = Simulator::new(128, 128, 4, &g);
+        simulator.scenario_two_bridge();
+        let [short, long] = simulator
+            .bridge_gates
+            .expect("two bridge should register gates");
+        assert_eq!(short.x, long.x);
+        assert!(short.y_max < simulator.world.height as f32 * 0.5);
+        assert!(long.y_min > simulator.world.height as f32 * 0.5);
+        assert!(short.y_max < long.y_min);
+    }
+
+    #[test]
     fn determinism_two_runs_equal() {
         let mut a = sim_two(7);
         let mut b = sim_two(7);
@@ -571,7 +823,10 @@ mod tests {
             a.step();
             b.step();
         }
-        assert!((a.collected - b.collected).abs() < 1e-6, "collected differs");
+        assert!(
+            (a.collected - b.collected).abs() < 1e-6,
+            "collected differs"
+        );
         assert_eq!(a.ants.len(), b.ants.len(), "alive count differs");
     }
 
@@ -590,7 +845,12 @@ mod tests {
         for _ in 0..200 {
             s.step();
         }
-        for ch in [Channel::Trail, Channel::Home, Channel::Alarm, Channel::Recruitment] {
+        for ch in [
+            Channel::Trail,
+            Channel::Home,
+            Channel::Alarm,
+            Channel::Recruitment,
+        ] {
             for &v in s.world.field.channel_slice(ch) {
                 assert!(v >= 0.0, "field cell negative");
             }
@@ -613,7 +873,10 @@ mod tests {
             s.step();
         }
         let total = s.collected_a + s.collected_b;
-        assert!(total <= budget + 1.0, "collected {total} exceeds budget {budget}");
+        assert!(
+            total <= budget + 1.0,
+            "collected {total} exceeds budget {budget}"
+        );
     }
 
     /// T16: food delivery/pickup releases reward dopamine (PAM analog).
@@ -632,7 +895,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "no ant ever released reward dopamine (no delivery/pickup?)");
+        assert!(
+            found,
+            "no ant ever released reward dopamine (no delivery/pickup?)"
+        );
     }
 
     /// T16: war damage releases punish dopamine (PPL1 analog).
@@ -652,7 +918,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "no ant ever released punish dopamine (no war damage?)");
+        assert!(
+            found,
+            "no ant ever released punish dopamine (no war damage?)"
+        );
     }
 
     /// T16: reward dopamine gates LTP. With reward_gain=0.5, foraging drives
@@ -662,8 +931,10 @@ mod tests {
     fn mb_reward_dopamine_enables_ltp() {
         let seed = Genome::default().mb_weights.clone();
         let run = |reward_gain: f32| -> f32 {
-            let mut g = Genome::default();
-            g.mb_dopamine_reward_gain = reward_gain;
+            let g = Genome {
+                mb_dopamine_reward_gain: reward_gain,
+                ..Genome::default()
+            };
             let mut s = Simulator::new(96, 96, 11, &g);
             s.brain_mb = true;
             s.set_colony_size(60, &g);
@@ -692,7 +963,11 @@ mod tests {
         };
         let with_reward = run(0.5);
         let no_reward = run(0.0);
-        assert!(with_reward > 0.0, "reward dopamine should drive LTP: {}", with_reward);
+        assert!(
+            with_reward > 0.0,
+            "reward dopamine should drive LTP: {}",
+            with_reward
+        );
         assert!(
             with_reward > no_reward,
             "reward should enable more LTP than no-reward: {} vs {}",
@@ -709,8 +984,7 @@ mod tests {
         let mk = |energy: f32| -> f32 {
             let mut s = Simulator::new(64, 64, 1, &g);
             s.brain_mb = true;
-            let mut ant =
-                crate::ant::Ant::new(crate::world::Vec2::new(32.0, 32.0), 0.0, &g, 1);
+            let mut ant = crate::ant::Ant::new(crate::world::Vec2::new(32.0, 32.0), 0.0, &g, 1);
             ant.carrying = true;
             ant.energy = energy;
             ant.age = 1000; // past nurse_age → foraging logic, not nursing
@@ -735,8 +1009,10 @@ mod tests {
     fn mb_wkc_plasticity_reward_ltp() {
         let seed = Genome::default().mb_weights.clone();
         let run = |reward_gain: f32| -> f32 {
-            let mut g = Genome::default();
-            g.mb_dopamine_reward_gain = reward_gain;
+            let g = Genome {
+                mb_dopamine_reward_gain: reward_gain,
+                ..Genome::default()
+            };
             let mut s = Simulator::new(96, 96, 11, &g);
             s.brain_mb = true;
             s.set_colony_size(60, &g);
@@ -765,7 +1041,11 @@ mod tests {
         };
         let with_reward = run(0.5);
         let no_reward = run(0.0);
-        assert!(with_reward > 0.0, "reward should drive W_kc LTP: {}", with_reward);
+        assert!(
+            with_reward > 0.0,
+            "reward should drive W_kc LTP: {}",
+            with_reward
+        );
         assert!(
             with_reward > no_reward,
             "reward W_kc LTP {} should exceed no-reward {}",

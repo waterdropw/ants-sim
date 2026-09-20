@@ -2,8 +2,8 @@
 # Camazine et al. (2001) "Self-Organization in Biological Systems" ch.13.
 metric = "bridge_short_path_fraction"
 source = "Deneubourg/Goss 1989/1990; Camazine et al. 2001 synthesis"
-caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a per-colony copy of a copyrighted dataset. Colony sizes, species (Linepithema humile), and timing differ from the model; the model's tick<->seconds is undefined. Quantitative-magnitude fit, not a statistical fit."
-description = "Fraction of trail traffic on the SHORTER bridge. Real colonies converge to ~80-90% on the short branch."
+caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a per-colony copy of a copyrighted dataset. Colony sizes, species (Linepithema humile), bridge geometry and timing differ from the model; tick<->seconds is undefined. The model now measures actual inbound gate crossings, but this is still an abstract protocol rather than a statistical or species-level fit. Interval overlap is descriptive only."
+description = "Fraction of traffic on the shorter bridge after convergence. The model comparator is the fraction of returning ants crossing the short-arm gate; it is not inferred from pheromone concentration."
 
 # post-convergence short-bridge fraction across replicates
 [[datapoints]]

@@ -89,15 +89,22 @@ pub fn sense(ant: &Ant, world: &World) -> Sensing {
     }
     let vis_range = g.food_radius * 5.0;
     for (i, f) in world.food.iter().enumerate() {
-        if f.amount <= 0.0 { continue; }
+        if f.amount <= 0.0 {
+            continue;
+        }
         let dx = f.pos.x - ant.pos.x;
         let dy = f.pos.y - ant.pos.y;
         let dist = dx.hypot(dy);
         if dist <= vis_range {
             let mut rel = dy.atan2(dx) - ant.heading;
-            while rel > std::f32::consts::PI { rel -= std::f32::consts::TAU; }
-            while rel < -std::f32::consts::PI { rel += std::f32::consts::TAU; }
-            if rel.abs() < 1.0 { // ~57° forward cone
+            while rel > std::f32::consts::PI {
+                rel -= std::f32::consts::TAU;
+            }
+            while rel < -std::f32::consts::PI {
+                rel += std::f32::consts::TAU;
+            }
+            if rel.abs() < 1.0 {
+                // ~57° forward cone
                 s.vision_food_idx = Some(i);
                 s.vision_food_bearing = dy.atan2(dx); // world-frame
                 s.vision_food_dist = dist;

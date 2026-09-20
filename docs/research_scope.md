@@ -1,62 +1,95 @@
-# ants-sim 研究范围：可验证与不可验证
+# ants-sim 研究范围：模型内证据、外部假设与边界
 
-本文界定 ants-sim 作为研究工具的适用范围：哪些命题可在系统内验证并外推为可证伪预测，哪些超出系统边界。定位：ants-sim 是**充分性/消融引擎 + 比较试验台**，非保真度模型。
+本文界定 ants-sim 的证据范围。它是一个**抽象机制比较、反事实扰动与假设生成试验台**，不是特定物种、神经回路或生态系统的保真模型。
 
 ## 系统定位
 
-模型为示意级（abstract species、tick↔物理时间无量纲、无受版权数据集）。因此系统能回答三类问题：
-1. **机制充分性**（sufficiency）：机制 X 是否足以产生行为 Y？
-2. **消融后果**（ablation/counterfactual）：移除 X 后行为 Y 如何变化？
-3. **跨架构/环境比较**（comparative）：哪种架构/配置更鲁棒？
+模型使用抽象物种、无量纲 tick、工程尺度神经模块和合成环境；基因组字段是控制参数，不是自然等位基因。因此它能可靠回答的是：
 
-而不能回答：物种级定量一致、真实必要性别、真实回路保真。
+1. **模型内机制依赖**：在固定实现、基因组、环境、读出和随机协议下，启用/关闭模块 X 是否改变读出 Y？
+2. **模型内反事实比较**：不同控制器、环境或评估窗口下，结果的相对脆弱性和稳健性如何？
+3. **可检验假设生成**：把模型模式转写为带物种、干预、对照和读出的方向性湿实验假设。
 
-## 可验证 / 可生成可测预测的命题
+消融不是充分性检验：关闭 X 后 Y 变化，只说明 X 是该实现中的影响因素。构造性充分性还需在缺失背景中加入 X 后重建 Y；真实必要性还需要物种内、机制特异的因果干预。
 
-### A. 机制充分性（消融法：关闭 X，观察 Y 是否丧失）
+## 当前可报告的模型内读出
 
-| 机制 | 充分性命题 | 消融结果 | 外推预测（真实干预） |
-|---|---|---|---|
-| stigmergy + 挥发 | 足以涌现短路径选择 | 双桥 0.88 vs 0.82 ✓；trail 消融→吞吐变化 | 信息素挥发干预应丧失短路径收敛 |
-| 路径积分（home vector） | 足以无地标归巢 | homevector 消融→归巢/觅食崩 | PI 损伤（CX/stride-integration 干扰）应损害归巢 |
-| 多巴胺门控 STDP | 足以做联想学习 | reward/STDP 消融→权重漂移丧失 | PAM/PPL1-DAN 沉默应损害果蝇 Appetitive/Aversive memory |
-| octopamine 唤醒 | 足以调制觅食活力 | octopamine 消融→收集 -52.7% | OA-受体敲低应降低探索/觅食率 |
-| brood eclosion | 足以驱动蚁群扩张 | eclosion 消融→max_alive -17.4% | nurse 移除应使群体增长停滞 |
-| 视觉 | 足以视觉奔食 | vision 消融→MB/SNN 觅食降 | 致盲应降低视觉依赖种的觅食 |
+| 模块/协议 | 模型内可报告结论 | 禁止的直接等同 |
+|---|---|---|
+| `--bridge` | 用两条门线的实际进/返程过线数计算短路返程流量占比；可比较启用/关闭 Trail 后的模型交通模式。 | Trail 峰值、浓度比或其变换值不是蚂蚁交通比例。 |
+| `--caste` | 对 `Explore`、`FollowTrail`、`CarryReturn`、`Alarm`、`Defend`、`Nurse` 的实时状态做时间预算统计。 | 状态预算不是形态品级、固定反应阈值或真实守卫比例。 |
+| `--ablate` | 使用配对 seed 的 baseline/关闭模块比较，报告产出、存活、人口过程和内部权重漂移。 | 程序开关不是一一对应的药理、基因、脑区或神经元操作。 |
+| `--bench-cx` | 在已知朝向、无感觉噪声的数值步行中量化抽象积分器误差。 | 不是 Cataglyphis 的 CX 病灶实验或真实路径积分误差拟合。 |
+| `--compare-lit` | 将定义不同的代表性文献量级作为上下文锚点，并显式显示不匹配。 | 区间命中不是物种级验证、统计拟合或模型选择证据。 |
 
-### B. 基因×环境特化（transfer 矩阵）
-冠军在异地退化 ✓。预测：真蚁对一种食源分布的适应应降低在异质环境的表现（可移植实验测）。
+## 模型内结果如何转为外部假设
 
-### C. 架构鲁棒性比较
-CX 是最鲁棒神经网（maze/scarce 追平 FSM）✓。比较预测：类中央复合体路径积分比纯感-运 MLP 跨环境更鲁棒（跨物种可比较）。
+### A. 信息素与双桥
 
-### D. 分工阈值
-阈值→~30% guard 稳态 ✓。预测：扰动 task threshold 应平移品级比（Gordon 式操纵可测）。
+**模型内证据**：返巢蚂蚁的 Trail 沉积与衰减可在当前双桥几何中改变两臂的门线通行流量。
 
-### E. 协同进化军备竞赛
-两群共享资源 winner 翻转 ✓。预测：territorial 蚁应示 cyclic dominance（田实验可测）。
+**可检验假设**：在依赖群体招募的物种、明确双路径和控制食源条件下，降低 trail 信号可用性或持久性可能降低短路径偏置、降低其收敛速度，或增加重复间变异；并不预言选择必然完全消失。
 
-### F. 演化视野泛化
-演化跨过生存阈值→泛化更长视野；视野匹配最可靠；非目标视野选择高方差 ✓（复现性验证）。类比实验演化（Lenski 式）可测。
+**边界**：模型没有真实信息素分子、受体、挥发动力学或物种特异的觅食规则。
 
-### G. 新奇度搜索维持多样性
---novelty 维持行为多样性 ✓。人工生命/细菌演化实验可测。
+### B. 路径积分与 CX-like 模块
+
+**模型内证据**：清空内部 home-vector 状态会改变当前控制器的归巢和交付读出。
+
+**可检验假设**：在地标稀少、但仍可利用太阳/天空罗盘的导航任务中，选择性扰动方向罗盘、里程计或相关整合通路应增加归巢方向或距离误差。
+
+**边界**：`homevector` 是抽象状态清零；不等同于中央复合体的局灶操纵。沙漠蚁“地标稀少”也不等于无视觉线索。
+
+### C. 多巴胺调制的可塑性
+
+**模型内证据**：reward/punish 标量可门控 MB/ANN 权重更新；`weight_drift` 是内部可塑性状态指标。
+
+**可检验假设**：在已定义的 CS–US 配对任务、特定 DAN 亚群与 MB 分室中，抑制相应通路可能选择性影响相应价性的行为记忆。
+
+**边界**：当前觅食 pickup/delivery 或伤害不是嗅觉条件化；权重漂移不是关联记忆的行为读出。PAM/PPL1 只能被称为功能类比，不能当作模型中的真实细胞类型。
+
+### D. OA-like 唤醒、育幼与视觉
+
+- OA-like 变量是模型内同时影响探索、线索响应、攻击和步速的耦合状态；其消融不能等同于某个 OA 受体、递质合成酶或神经元群的操作。
+- `eclosion` 消融只阻止模型的 brood→adult 转换；它不等同于移除 nurse。真实净增长还取决于产卵、brood 存活、发育、营养、死亡和任务重分配。
+- `vision` 消融只移除前方近距离食物探测；它不等同于遮眼、去地标、天空偏振罗盘干预或完整视觉导航。
+
+### E. 演化、架构与竞争
+
+- 迁移矩阵可显示此参数化下的 G×E 和潜在特化—泛化权衡；性能下降不是所有环境组合中必然存在的生物学 trade-off。
+- 控制器排名是**算法归纳偏置**比较。它不支持“CX 比 MLP 跨物种更鲁棒”或真实神经架构优劣的结论。
+- 两群胜负翻转仅表明竞争对策略和初始条件敏感；没有三策略非传递支付矩阵、频率依赖与稳定循环，就不能称为 cyclic dominance。
+- `--novelty` 是人工搜索算子。它可与 fitness-only 对照比较模型行为描述符的多样性，不能解释为自然种群中的“新奇度选择”。
 
 ## 不可验证 / 系统边界
 
-1. **物种级定量一致**：抽象物种、tick↔秒无量纲。不能声称匹配某具体物种数据（CX 漂移甚至比真蚁更准——无传感噪声，非保真）。
-2. **真实必要性别**：sim 证"X 足以产生 Y" ≠ "真蚁用 X"。真蚁可能用别种机制。**充分性 ≠ 必要性**。
-3. **真实神经回路保真**：MB（12 瞌小球/64KC）、CX（16 单元）为抽象，非连接组级（如果蝇 hemibrain）。不可结构验证。
-4. **田间生态真实**：无真捕食者/天气/竞争/寄生蜂。不可预测真实田适应度。
-5. **分子/遗传机制**：无基因调控、表观遗传、发育生物学（基因组仅标量场）。不可测如 foraging 基因(PKG)效应。
-6. **学习曲线定量拟合**：MB 学习比 0.55 vs 果蝇 1.5（负结果）；模型"trial"≠气味-电击 pairing。不可验证学习动力学定量。
-7. **系统发育/宏观演化**：GA 短（8-16 代）。不可回答物种形成/深度系统发育。
-8. **信息素化学**：4 抽象通道，无真实信息素身份/化学。不可测信息素特异性（如表皮烃识别）。
-9. **个体识别/社会记忆**：蚂蚁可互换（无个体身份/识别）。不可测个体识别假说。
-10. **真实规模**：200 蚁/10⁴ tick vs 真蚁 10⁴-10⁶ 蚁/年级。规模依赖涌现不可靠外推。
+1. **物种级定量一致**：tick 不映射秒、格点不映射米，且文献读出与模型读出常不同构。
+2. **真实必要性、充分性与回路保真**：MB（12 瞌小球/64 KC）和 CX（16 单元）是工程尺度抽象，不是连接组或病灶模型。
+3. **田间生态适合度**：抽象敌人不代表经校准的捕食、天气、竞争、寄生或季节生态。
+4. **分子、遗传、发育机制**：没有基因调控、表观遗传或真实发育；不可外推到 `foraging/PKG` 等位基因效应。
+5. **学习动力学拟合**：模型的觅食 bout、内部权重变化与果蝇 odor–shock/odor–sugar trial 不同构。
+6. **系统发育、物种形成和宏观演化**：短期 GA 不能代表长期种群历史。
+7. **真实信息素化学、个体识别与社会记忆**：四个抽象通道与可互换个体不包含这些机制。
+8. **规模外推**：许多物种成熟群体远大于当前常用 colony；规模依赖涌现未经验证。
+
+## 参考文献与使用方式
+
+以下文献提供外部背景或可检验假设的依据；它们不把当前模型转化为对应物种的定量拟合。
+
+1. Goss, S. et al. (1989). *Self-organized shortcuts in the Argentine ant*. **Naturwissenschaften** 76, 579–581. DOI: [10.1007/BF00462870](https://doi.org/10.1007/BF00462870).
+2. Müller, M. & Wehner, R. (1988). *Path integration in desert ants, Cataglyphis fortis*. **PNAS** 85, 5287–5290. DOI: [10.1073/pnas.85.14.5287](https://doi.org/10.1073/pnas.85.14.5287).
+3. Wehner, R. (2003). *Desert ant navigation: how miniature brains solve complex tasks*. **J. Comp. Physiol. A** 189, 579–588. DOI: [10.1007/s00359-003-0431-1](https://doi.org/10.1007/s00359-003-0431-1).
+4. Seelig, J. D. & Jayaraman, V. (2015). *Neural dynamics for landmark orientation and angular path integration*. **Nature** 521, 186–191. DOI: [10.1038/nature14446](https://doi.org/10.1038/nature14446).
+5. Aso, Y. et al. (2014). *The neuronal architecture of the mushroom body provides a logic for associative learning*. **eLife** 3:e04577. DOI: [10.7554/eLife.04577](https://doi.org/10.7554/eLife.04577).
+6. Liu, C. et al. (2012). *A subset of dopamine neurons signals reward for odour memory in Drosophila*. **Nature** 488, 512–516. DOI: [10.1038/nature11304](https://doi.org/10.1038/nature11304).
+7. Aso, Y. et al. (2010). *Specific dopaminergic neurons for the formation of labile aversive memory*. **Current Biology** 20, 1445–1451. DOI: [10.1016/j.cub.2010.06.048](https://doi.org/10.1016/j.cub.2010.06.048).
+8. Burke, C. J. et al. (2012). *Layered reward signalling through octopamine and dopamine in Drosophila*. **Nature** 492, 433–437. DOI: [10.1038/nature11614](https://doi.org/10.1038/nature11614).
+9. Gordon, D. M. (1996). *The organization of work in social insect colonies*. **Nature** 380, 121–124. DOI: [10.1038/380121a0](https://doi.org/10.1038/380121a0).
+10. Bonabeau, E., Theraulaz, G. & Deneubourg, J.-L. (1996). *Quantitative study of the fixed threshold model for the regulation of division of labour in insect societies*. **Proc. R. Soc. B** 263, 1565–1569. DOI: [10.1098/rspb.1996.0229](https://doi.org/10.1098/rspb.1996.0229).
+11. Kawecki, T. J. & Ebert, D. (2004). *Conceptual issues in local adaptation*. **Ecology Letters** 7, 1225–1241. DOI: [10.1111/j.1461-0248.2004.00684.x](https://doi.org/10.1111/j.1461-0248.2004.00684.x).
+12. Sinervo, B. & Lively, C. M. (1996). *The rock–paper–scissors game and the evolution of alternative male strategies*. **Nature** 380, 240–243. DOI: [10.1038/380240a0](https://doi.org/10.1038/380240a0).
+13. Lehman, J. & Stanley, K. O. (2011). *Abandoning Objectives: Evolution Through the Search for Novelty Alone*. **Evolutionary Computation** 19, 189–223. DOI: [10.1162/EVCO_a_00025](https://doi.org/10.1162/EVCO_a_00025).
 
 ## 元结论
 
-系统最该用于**消融+比较生成脆性预测**（移除 X→Y 断），交湿实验确认。最强可外推项为 A 类（机制充分性→PAM/PPL1/octopamine/CX/PI 沉默预测）与 C 类（架构鲁棒性比较预测）。最不该声称者为 1-3（物种定量一致、必要性、回路保真）。
-
-"sim 内已证"转为"可在真蚁/果蝇测的具体干预预测"——预测方向与机制是内容，量化幅度为模型特定。
+应把“sim 内已证”写为“在本模型、此参数和此读出下观察到”；应把“真实干预应当”写为“可检验的、带条件的外部假设”。模型内百分比只描述该实现，不构成物种级效应量预测。

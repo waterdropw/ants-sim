@@ -157,7 +157,11 @@ impl PheromoneField {
             }
             y += 1;
         }
-        if n > 0.0 { sum / n } else { 0.0 }
+        if n > 0.0 {
+            sum / n
+        } else {
+            0.0
+        }
     }
 
     /// Max concentration in an axis-aligned box around (cx, cy) of half-size r.

@@ -22,6 +22,111 @@ use eframe::egui;
 use rand::{Rng, SeedableRng};
 use std::io::Write;
 
+#[derive(Clone, Copy, Debug, Default)]
+struct Moments {
+    n: u64,
+    mean: f64,
+    m2: f64,
+}
+
+impl Moments {
+    fn push(&mut self, value: f64) {
+        self.n += 1;
+        let delta = value - self.mean;
+        self.mean += delta / self.n as f64;
+        self.m2 += delta * (value - self.mean);
+    }
+
+    fn sample_sd(self) -> Option<f64> {
+        (self.n > 1).then(|| (self.m2 / (self.n - 1) as f64).sqrt())
+    }
+
+    fn display_sd(self) -> String {
+        self.sample_sd()
+            .map(|sd| format!("{sd:.3}"))
+            .unwrap_or_else(|| "NA".to_string())
+    }
+
+    fn display_count(self) -> u64 {
+        self.n
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TaskMoments {
+    foraging: Moments,
+    defense: Moments,
+    brood_care: Moments,
+}
+
+impl TaskMoments {
+    fn push(&mut self, fractions: sim::TaskFractions) {
+        self.foraging.push(fractions.foraging as f64);
+        self.defense.push(fractions.defense as f64);
+        self.brood_care.push(fractions.brood_care as f64);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AblationReadout {
+    collected: f64,
+    max_alive: f64,
+    final_alive: f64,
+    weight_drift: f64,
+}
+
+fn apply_brain(sim: &mut sim::Simulator, brain: &str) {
+    sim.brain_ann = brain == "ann" || brain == "cppn";
+    sim.brain_snn = brain == "snn";
+    sim.brain_mb = brain == "mb";
+    sim.brain_cx = brain == "cx";
+}
+
+fn configure_ablation(sim: &mut sim::Simulator, mechanism: &str, enabled: bool) {
+    sim.ablate_octopamine = enabled && mechanism == "octopamine";
+    sim.ablate_trail = enabled && mechanism == "trail";
+    sim.ablate_eclosion = enabled && mechanism == "eclosion";
+    sim.ablate_homevector = enabled && mechanism == "homevector";
+    sim.ablate_vision = enabled && mechanism == "vision";
+    sim.ablate_stdp = enabled && mechanism == "stdp";
+    sim.ablate_reward = enabled && mechanism == "reward";
+    sim.ablate_punish = enabled && mechanism == "punish";
+}
+
+fn run_task_protocol(
+    cfg: &config::Config,
+    seed: u64,
+    brain: &str,
+    env_name: &str,
+    colony: usize,
+    ticks: u64,
+    warmup: u64,
+    sample_every: u64,
+) -> TaskMoments {
+    let g = cfg.genome.clone();
+    let env = environment::Environment::build(
+        env_name,
+        world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y),
+        cfg.world.width as f32,
+        cfg.world.height as f32,
+    );
+    let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &g);
+    simulator.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
+    simulator.world.nest_radius = cfg.world.nest_radius;
+    apply_brain(&mut simulator, brain);
+    simulator.set_colony_size(colony, &g);
+    simulator.apply_environment(&env);
+
+    let mut moments = TaskMoments::default();
+    for tick in 0..ticks {
+        simulator.step();
+        if tick + 1 >= warmup && (tick + 1 - warmup).is_multiple_of(sample_every.max(1)) {
+            moments.push(sim::TaskFractions::from_ants(&simulator.ants));
+        }
+    }
+    moments
+}
+
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
@@ -145,7 +250,11 @@ fn fingerprint(sim: &sim::Simulator) -> String {
         .sum();
     format!(
         "col={:.4} visits={:?} trail_sum={:.6} home_sum={:.6} ants={}",
-        sim.collected, sim.source_visits, trail_sum, home_sum, sim.ants.len()
+        sim.collected,
+        sim.source_visits,
+        trail_sum,
+        home_sum,
+        sim.ants.len()
     )
 }
 
@@ -179,11 +288,33 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             env.name, pop, gens, eticks, colony
         );
         let n_seeds: usize = arg_value(args, "--n-seeds", "3").parse().unwrap_or(3);
-        let res = evolution::run(&cfg, &env, &cfg.genome, pop, gens, eticks, colony, cfg.sim.seed, n_seeds, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal, niche, novelty);
+        let res = evolution::run(
+            &cfg,
+            &env,
+            &cfg.genome,
+            pop,
+            gens,
+            eticks,
+            colony,
+            cfg.sim.seed,
+            n_seeds,
+            brain_ann,
+            brain_cppn,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            seasonal,
+            niche,
+            novelty,
+        );
         for r in &res.history {
             println!(
                 "  gen {:<2} best={:.2} mean={:.2} worst={:.2} div={:.4}",
-                r.gen, r.best, r.mean, r.worst, res.diversity.get(r.gen as usize).copied().unwrap_or(0.0)
+                r.gen,
+                r.best,
+                r.mean,
+                r.worst,
+                res.diversity.get(r.gen as usize).copied().unwrap_or(0.0)
             );
         }
         // open-ended litmus (T5.3 genotypic + T18 behavioral): neither
@@ -232,7 +363,10 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         );
         let mut hist = String::from("gen,best,mean,worst\n");
         for r in &res.history {
-            hist.push_str(&format!("{},{:.4},{:.4},{:.4}\n", r.gen, r.best, r.mean, r.worst));
+            hist.push_str(&format!(
+                "{},{:.4},{:.4},{:.4}\n",
+                r.gen, r.best, r.mean, r.worst
+            ));
         }
         let _ = std::fs::write(format!("{stem}_history.csv"), hist);
         println!("  saved: {stem}.toml + {stem}_history.csv");
@@ -256,7 +390,22 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             "EVOLVE-ML (multilevel) env={} pool={} gens={} ticks={} colony={}",
             env.name, pool, gens, eticks, colony
         );
-        let res = evolution::run_multilevel(&cfg, &env, &cfg.genome, pool, gens, eticks, colony, cfg.sim.seed, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+        let res = evolution::run_multilevel(
+            &cfg,
+            &env,
+            &cfg.genome,
+            pool,
+            gens,
+            eticks,
+            colony,
+            cfg.sim.seed,
+            brain_ann,
+            brain_cppn,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            seasonal,
+        );
         for r in &res.history {
             println!("  gen {:<2} colony_score={:.2}", r.gen, r.best);
         }
@@ -313,10 +462,30 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 cfg.world.height as f32,
             );
             // different seed per env so each run is independent but reproducible
-            let name_hash = name.bytes().fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
+            let name_hash = name
+                .bytes()
+                .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(b as u64));
             let env_seed = cfg.sim.seed.wrapping_add(name_hash.wrapping_mul(0x9E37));
             let n_seeds: usize = arg_value(args, "--n-seeds", "3").parse().unwrap_or(3);
-            let res = evolution::run(&cfg, &env, &cfg.genome, pop, gens, eticks, colony, env_seed, n_seeds, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal, niche, novelty);
+            let res = evolution::run(
+                &cfg,
+                &env,
+                &cfg.genome,
+                pop,
+                gens,
+                eticks,
+                colony,
+                env_seed,
+                n_seeds,
+                brain_ann,
+                brain_cppn,
+                brain_snn,
+                brain_mb,
+                brain_cx,
+                seasonal,
+                niche,
+                novelty,
+            );
             println!(
                 "{:<12} {:>8.1} {:>8.1} {:>8.3} {:>8.3} {:>8.3} {:>8.3}",
                 name,
@@ -356,7 +525,9 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--report") {
         let out_dir = arg_value(args, "--out-dir", "results");
         let read_lines = |p: &str| -> Vec<String> {
-            std::fs::read_to_string(p).map(|s| s.lines().map(|l| l.to_string()).collect()).unwrap_or_default()
+            std::fs::read_to_string(p)
+                .map(|s| s.lines().map(|l| l.to_string()).collect())
+                .unwrap_or_default()
         };
         let champs = read_lines(&format!("{out_dir}/champions.csv"));
         let zoo = read_lines(&format!("{out_dir}/zoo.csv"));
@@ -375,8 +546,10 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             for l in champs.iter().skip(1) {
                 let f: Vec<&str> = l.split(',').collect();
                 if f.len() >= 8 {
-                    r.push_str(&format!("| {} | {} | {} | {} | {} | {} | {} | {} |\n",
-                        f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]));
+                    r.push_str(&format!(
+                        "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                        f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]
+                    ));
                 }
             }
         } else {
@@ -396,24 +569,30 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             for l in zoo.iter().skip(1) {
                 let f: Vec<&str> = l.split(',').collect();
                 if f.len() >= 7 {
-                    r.push_str(&format!("| {} | {} | {} | {} | {} | {} | {} |\n",
-                        f[0], f[1], f[2], f[3], f[4], f[5], f[6]));
+                    r.push_str(&format!(
+                        "| {} | {} | {} | {} | {} | {} | {} |\n",
+                        f[0], f[1], f[2], f[3], f[4], f[5], f[6]
+                    ));
                 }
             }
         } else {
             r.push_str("_(zoo.csv 缺失：先跑 `--zoo`)_\n");
         }
-        r.push_str("\n");
+        r.push('\n');
 
         // --- transfer matrix ---
         r.push_str("## 3. 跨环境迁移矩阵（环境特化）\n\n");
-        r.push_str("每个冠军跑所有 5 个环境；对角线=原生环境，其余=迁移。特化=对角线高于均值。\n\n");
+        r.push_str(
+            "每个冠军跑所有 5 个环境；对角线=原生环境，其余=迁移。特化=对角线高于均值。\n\n",
+        );
         if !transfer.is_empty() {
             let hdr: Vec<&str> = transfer[0].split(',').collect();
             r.push_str(&format!("| {} |", hdr.join(" | ")));
             r.push_str("\n|");
-            for _ in &hdr { r.push_str("---|"); }
-            r.push_str("\n");
+            for _ in &hdr {
+                r.push_str("---|");
+            }
+            r.push('\n');
             for l in transfer.iter().skip(1) {
                 let f: Vec<&str> = l.split(',').collect();
                 r.push_str("| ");
@@ -427,60 +606,69 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
 
         // validation section
         r.push_str("## 4. 文献对齐验证\n\n");
-        // bridge ACO curve peak ratio
         if let Ok(txt) = std::fs::read_to_string("results/bridge.csv") {
-            let mut peak = 0.0f32;
-            let mut init = 0.0f32;
-            let mut first = true;
-            for l in txt.lines().skip(1) {
-                let f: Vec<&str> = l.split(',').collect();
-                if f.len() >= 4 {
-                    if let Ok(v) = f[3].parse::<f32>() {
-                        if first { init = v; first = false; }
-                        peak = peak.max(v);
-                    }
-                }
+            let mut lines = txt.lines();
+            let is_gate_flow_schema = lines.next() == Some("tick,short_outbound,long_outbound,short_inbound,long_inbound,short_inbound_fraction,collected");
+            let fraction = is_gate_flow_schema
+                .then(|| {
+                    lines
+                        .filter_map(|line| line.split(',').nth(5)?.trim().parse::<f32>().ok())
+                        .next_back()
+                })
+                .flatten();
+            if let Some(fraction) = fraction {
+                r.push_str(&format!("- **双桥门线流量**：短桥返巢过线流量占比={fraction:.3}。这是实际 movement segment 的计数，不是 Trail 浓度或其变换；需要重复运行才能估计不确定性。\n"));
+            } else {
+                r.push_str(
+                    "- **双桥门线流量**：bridge.csv 没有可用返巢流量；请重跑 `--bridge`。\n",
+                );
             }
-            r.push_str(&format!(
-                "- **双桥 ACO 收敛**：短路/长路 Trail 浓度比，初值={:.2}，峰值={:.2}（短路径被正反馈放大——经典 ACO 涌现）。\n",
-                init, peak
-            ));
         }
-        r.push_str("- **工/兵分工**：守卫品级(task_jitter<0)占比 ≈ 0.30，落在真蚁经验区间 [0.2, 0.4]（`--caste` 验证）。\n");
-        r.push_str("- **育幼 stigmergy**：有 nurse 品级时 brood 增长（20→354），无 nurse 时衰减（20→1.6）——对照真蚁 brood-care 依赖照料者（`--brood` 验证）。\n");
-        r.push_str("- **协同进化**：两群共享有限食物竞争，winner 身份在多轮间反复翻转（军备竞赛迹象），champion 在竞争压力下提升（`--coevolve` 验证）。\n");
-        r.push_str("- **确定性**：`--verify-determinism` 双跑指纹逐字节一致（rayon 并行下可复现）。\n\n");
+        r.push_str("- **行为状态预算**：`--caste` 在 warm-up 后统计觅食/防御/育幼 State 的时间均值与波动；它不报告预置 task_jitter，也不等同于形态品级。\n");
+        r.push_str("- **育幼人口过程**：模型的 nurse 行为与 brood→adult 转换可改变 colony size；这不等同于真实 nurse 移除实验。\n");
+        r.push_str("- **竞争敏感性**：两群共享有限食物时 winner 可翻转，表明该实现对策略和初始条件敏感；这不是 cyclic dominance 的证据。\n");
+        r.push_str(
+            "- **确定性**：`--verify-determinism` 双跑指纹逐字节一致（rayon 并行下可复现）。\n\n",
+        );
 
         r.push_str("## 5. 与文献对照\n\n");
         r.push_str("### 5.1 定量对照（模型 vs 文献量级）\n\n");
-        r.push_str("| 指标 | 模型值 | 文献量级 | 对齐 |\n");
+        r.push_str("| 指标 | 当前模型读出 | 外部文献 | 可得结论 |\n");
         r.push_str("|---|---|---|---|\n");
-        r.push_str("| 双桥短路径占比 | ~88%（峰值比 7×） | Deneubourg/Goss：收敛后 ~80–90% 走短桥 | ✓ 同量级 |\n");
-        r.push_str("| 信息素半衰期 | ~46 tick（decay 0.015/tick） | 真蚁 trail 挥发分钟–小时级 | ~（取决于 tick↔秒映射） |\n");
-        r.push_str("| 分工：forager 占比 | ~70% | 社会性昆虫 minor/forager 多数 | ✓ 同量级 |\n");
-        r.push_str("| 分工：guard+nurse | ~30% | minor-major 余数 | ✓ 同量级 |\n");
-        r.push_str("| 育幼依赖照料 | 有 nurse→brood 增长 | 真蚁 brood-care 依赖照料者 | ✓ 定性一致 |\n");
-        r.push_str("| 演化适应 | best 单调 315→1589（5×） | （无直接对应，sim 结果） | — |\n\n");
-        r.push_str("### 5.2 定性说明\n\n");
-        r.push_str("- **觅食路径优化（ACO）**：双桥短路径浓度被正反馈放大（峰值 ~7×）——对齐 Deneubourg/Goss 双桥实验的「短路径胜出」。注：长跑末段因能量死亡衰减，非 ACO 失败。\n");
-        r.push_str("- **分工品级**：nurse/guard/forager 三分，forager ~70%、nurse+guard ~30%——对齐真蚁 minor/major worker 分布的量级（非精确匹配，模型为示意）。\n");
-        r.push_str("- **信息素蒸发时间尺度**：trail 衰减 0.015/tick，半衰期 ~46 tick——对齐真蚁信息素分钟级挥发（量级一致）。\n");
-        r.push_str("- **演化改善**：cppn+niche 深度演化 best 单调 315→1589（5×）——对齐「进化适应」的定性预期（非与具体物种数值对比）。\n");
-        r.push_str("- **文献数据点拟合（T18.3/T19.3）**：`literature/*.toml` 含显式发表数据点（带 source 引用 + caveat），`--compare-lit` 计算模型值与数据点的绝对误差/是否落区间。双桥短路径占比 模型 0.88 vs 文献 0.82 [0.80,0.90]（落区间，abs_err 0.06）；forager 占比 模型 0.69 vs 文献 0.30 [0.20,0.40]（不落区间——定义差异）；CX PI 漂移 模型 0.03–0.28% vs Cataglyphis 8–12% [5,15]（不落区间——模型无传感噪声更准，定性缩放一致）；MB 学习比 late/early 0.55 vs 果蝇 1.5 [1.1,3.0]（不落区间——colony 经济衰退主导，非突触学习缺失，诚实负结果）。\n");
-        r.push_str("- **局限**：本模型为示意级，`literature/*.toml` 数据点为经典结果（Deneubourg/Goss 双桥、Gordon 分工）的显式编码（带 source + caveat），非受版权原始数据集的逐点复制；tick↔物理时间无量纲化；故拟合为量级/显式数据点对照，非统计拟合。\n\n");
+        r.push_str("| 双桥短路偏置 | 返巢门线过线流量占比 | Deneubourg/Goss：收敛后短桥偏置 | 定义更接近，但几何/物种不同；仅描述性比较 |\n");
+        r.push_str("| 信息素半衰期 | 无量纲 tick | 真蚁 trail：分钟–小时级 | 无 tick→时间映射，不能量化对齐 |\n");
+        r.push_str("| 觅食状态预算 | `Explore+FollowTrail+CarryReturn` 的时间均值 | Gordon：离巢觅食个体比例 | 非同构读出，不能称验证 |\n");
+        r.push_str("| CX 误差 | 无感觉噪声的数值积分误差 | Cataglyphis 路径积分误差 | 只能比较误差随距离的定性模式 |\n");
+        r.push_str("| MB 可塑性 | 内部权重与交付率 | 果蝇条件化表现 | 不是同一学习任务 |\n\n");
+        r.push_str("### 5.2 解读规则\n\n");
+        r.push_str("- `--compare-lit` 的绝对误差或区间命中仅作**描述性上下文**；不能据此宣称模型通过生物学验证。\n");
+        r.push_str("- 双桥和任务分配已由 Trail 峰值/预置阈值代理重构为实际门线交通/实时 State 时间预算。历史峰值比、~88% 和 ~30% 数值不可与新协议直接比较。\n");
+        r.push_str("- 消融百分比是此实现、参数、环境和读出的 paired counterfactual effect；不是物种级效应量，也不能代替机制特异的湿实验。\n");
+        r.push_str("- 完整边界、假设写法和参考文献见 `docs/research_scope.md`。\n\n");
 
         r.push_str("## 6. 复现命令\n\n");
         r.push_str("```bash\n");
         r.push_str("export PATH=\"/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH\"\n");
-        r.push_str("cargo run --release -- --headless --evolve-all --gens 8 --pop 10   # 跨环境演化\n");
-        r.push_str("cargo run --release -- --headless --zoo --ticks 1000                # 冠军 vs 默认\n");
-        r.push_str("cargo run --release -- --headless --transfer --ticks 800           # 迁移矩阵\n");
-        r.push_str("cargo run --release -- --headless --verify-determinism --ticks 1000 # 确定性\n");
+        r.push_str(
+            "cargo run --release -- --headless --evolve-all --gens 8 --pop 10   # 跨环境演化\n",
+        );
+        r.push_str(
+            "cargo run --release -- --headless --zoo --ticks 1000                # 冠军 vs 默认\n",
+        );
+        r.push_str(
+            "cargo run --release -- --headless --transfer --ticks 800           # 迁移矩阵\n",
+        );
+        r.push_str(
+            "cargo run --release -- --headless --verify-determinism --ticks 1000 # 确定性\n",
+        );
         r.push_str("cargo run                                                            # GUI\n");
         r.push_str("```\n");
 
         let _ = std::fs::write("REPORT.md", r);
-        println!("REPORT.md written ({} bytes). Read it tomorrow.", std::fs::metadata("REPORT.md").map(|m| m.len()).unwrap_or(0));
+        println!(
+            "REPORT.md written ({} bytes). Read it tomorrow.",
+            std::fs::metadata("REPORT.md").map(|m| m.len()).unwrap_or(0)
+        );
         return Ok(());
     }
 
@@ -495,11 +683,13 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         // underestimated) and a small angular error. The leak-integrated ring
         // attractor should match that order of magnitude.
         let g = genome::Genome::default();
-        let world =
-            world::World::new(256, 256, world::Vec2::new(128.0, 128.0), 4.0);
+        let world = world::World::new(256, 256, world::Vec2::new(128.0, 128.0), 4.0);
         println!("BENCH-CX (path integration vs Cataglyphis literature)");
         println!("{}", "-".repeat(70));
-        println!("{:<10} {:<14} {:<14} {:<14}", "dist", "hv_mag", "mag_err_%", "dir_err_deg");
+        println!(
+            "{:<10} {:<14} {:<14} {:<14}",
+            "dist", "hv_mag", "mag_err_%", "dir_err_deg"
+        );
         println!("{}", "-".repeat(70));
         let stride = 0.5_f32;
         for &dist in &[10.0_f32, 20.0, 40.0, 80.0] {
@@ -513,7 +703,10 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             let mag = ant.cx_hv_x.hypot(ant.cx_hv_y);
             let mag_err = ((mag - dist) / dist).abs() * 100.0;
             let dir_err = ant.cx_hv_y.atan2(ant.cx_hv_x).to_degrees().abs();
-            println!("{:<10.1} {:<14.2} {:<14.1} {:<14.1}", dist, mag, mag_err, dir_err);
+            println!(
+                "{:<10.1} {:<14.2} {:<14.1} {:<14.1}",
+                dist, mag, mag_err, dir_err
+            );
         }
         println!("{}", "-".repeat(70));
         println!("literature (Cataglyphis fortis, Wehner & Muller): PI homing error");
@@ -525,7 +718,9 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
     }
 
     if args.iter().any(|a| a == "--bench") {
-        let colony: usize = arg_value(args, "--colony", "10000").parse().unwrap_or(10000);
+        let colony: usize = arg_value(args, "--colony", "10000")
+            .parse()
+            .unwrap_or(10000);
         let bticks: u64 = arg_value(args, "--ticks", "200").parse().unwrap_or(200);
         let interact = args.iter().any(|a| a == "--interact");
         let seed = cfg.sim.seed;
@@ -544,7 +739,10 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             dt, tps, sim.ants.len()
         );
         let pass = tps >= 30.0;
-        println!("BENCH {} (≥30 tick/s at N={colony})", if pass { "PASS" } else { "FAIL" });
+        println!(
+            "BENCH {} (≥30 tick/s at N={colony})",
+            if pass { "PASS" } else { "FAIL" }
+        );
         return Ok(());
     }
 
@@ -552,64 +750,112 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         let colony: usize = arg_value(args, "--colony", "500").parse().unwrap_or(500);
         let seed = cfg.sim.seed;
         let genome = cfg.genome.clone();
-        let mut sim = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
-        sim.set_colony_size(colony, &genome);
-        sim.scenario_two_bridge();
-        println!("BRIDGE symmetric two-bridge colony={colony} seed={seed} ticks={ticks}");
-        let h = sim.world.height as f32;
-        let w = sim.world.width as f32;
-        let sx = w * 0.27;
-        let top_y = h * 0.5 - 28.0;
-        let bot_y = h * 0.5 + 30.0;
-        let mut csv = String::from("tick,top_short,bottom_long,ratio,collected\n");
-        let mut ratios: Vec<f32> = Vec::new();
-        let mut last_print = 0u64;
-        for t in 0..ticks {
-            sim.step();
-            if t >= last_print {
-                let top = sim.world.field.max_in_rect(world::Channel::Trail, sx, top_y, 8.0);
-                let bot = sim.world.field.max_in_rect(world::Channel::Trail, sx, bot_y, 8.0);
-                let ratio = if bot > 1e-6 { top / bot } else { f32::INFINITY };
-                println!("  t={:<5} top(短)={:.4} bottom(长)={:.4} ratio={:.2} collected={:.0}",
-                    sim.tick, top, bot, ratio, sim.collected);
-                csv.push_str(&format!("{},{:.5},{:.5},{:.4},{:.0}\n", sim.tick, top, bot,
-                    if bot > 1e-6 { ratio } else { 0.0 }, sim.collected));
-                ratios.push(if bot > 1e-6 { ratio } else { 0.0 });
-                last_print = t + ticks / 6 + 1;
+        let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
+        simulator.scenario_two_bridge();
+        simulator.set_colony_size(colony, &genome);
+        println!("BRIDGE traffic-flow protocol colony={colony} seed={seed} ticks={ticks}");
+        let mut csv = String::from("tick,short_outbound,long_outbound,short_inbound,long_inbound,short_inbound_fraction,collected\n");
+        let sample_every = (ticks / 6).max(1);
+        for tick in 0..ticks {
+            simulator.step();
+            if (tick + 1) % sample_every == 0 || tick + 1 == ticks {
+                let flow = simulator.bridge_flow;
+                let fraction = flow.short_inbound_fraction();
+                let fraction_cell = fraction
+                    .map(|value| format!("{value:.5}"))
+                    .unwrap_or_else(|| "NA".to_string());
+                println!(
+                    "  t={:<5} short(out/in)={}/{} long(out/in)={}/{} short_inbound_fraction={} collected={:.0}",
+                    simulator.tick,
+                    flow.short_outbound,
+                    flow.short_inbound,
+                    flow.long_outbound,
+                    flow.long_inbound,
+                    fraction_cell,
+                    simulator.collected
+                );
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{:.0}\n",
+                    simulator.tick,
+                    flow.short_outbound,
+                    flow.long_outbound,
+                    flow.short_inbound,
+                    flow.long_inbound,
+                    fraction_cell,
+                    simulator.collected
+                ));
             }
         }
-        let top = sim.world.field.max_in_rect(world::Channel::Trail, sx, top_y, 8.0);
-        let bot = sim.world.field.max_in_rect(world::Channel::Trail, sx, bot_y, 8.0);
-        let both = top > 1e-6 && bot > 1e-6;
-        let final_ratio = if bot > 1e-6 { top / bot } else { f32::INFINITY };
-        let peak = ratios.iter().cloned().fold(0.0f32, f32::max);
-        let init = ratios.first().copied().unwrap_or(0.0);
-        let rising = peak > init.max(0.01) * 1.5;
+        let flow = simulator.bridge_flow;
+        let status = if flow.inbound_total() >= 20 {
+            "MEASURED"
+        } else {
+            "INSUFFICIENT_FLOW"
+        };
+        let fraction = flow
+            .short_inbound_fraction()
+            .map(|value| format!("{value:.3}"))
+            .unwrap_or_else(|| "NA".to_string());
         let _ = std::fs::create_dir_all("results");
         let _ = std::fs::write("results/bridge.csv", csv);
         println!(
-            "BRIDGE {} top(短)={:.4} bottom(长)={:.4} ratio={:.2} collected={:.0}  (both_used={}, rising={})",
-            if both && top > bot { "PASS" } else { "FAIL" }, top, bot, final_ratio, sim.collected, both, rising
+            "BRIDGE {status} short_inbound={} long_inbound={} short_fraction={} denominator={} collected={:.0}",
+            flow.short_inbound,
+            flow.long_inbound,
+            fraction,
+            flow.inbound_total(),
+            simulator.collected
         );
-        println!("  saved: results/bridge.csv  (ACO convergence curve)");
+        println!("  saved: results/bridge.csv (actual gate-crossing traffic; no pheromone-to-traffic conversion)");
         return Ok(());
     }
 
     if args.iter().any(|a| a == "--caste") {
         let colony: usize = arg_value(args, "--colony", "400").parse().unwrap_or(400);
-        let seed = cfg.sim.seed;
-        let genome = cfg.genome.clone();
-        let mut sim = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &genome);
-        sim.set_colony_size(colony, &genome);
-        // guard caste = task_jitter < 0 (foragers >= 0)
-        let guards = sim.ants.iter().filter(|a| a.task_jitter < 0.0).count() as f32;
-        let total = sim.ants.len().max(1) as f32;
-        let gfrac = guards / total;
-        let in_range = gfrac >= 0.2 && gfrac <= 0.4;
-        println!(
-            "CASTE colony={colony} guards={:.0} foragers={:.0} guard_frac={:.3} in[0.2,0.4]={}",
-            guards, total - guards, gfrac, in_range
+        let env_name = arg_value(args, "--env", "predator");
+        let brain = arg_value(args, "--brain", "fsm");
+        let cticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
+        let warmup: u64 = arg_value(args, "--caste-warmup", &(cticks / 3).to_string())
+            .parse()
+            .unwrap_or(cticks / 3);
+        let sample_every: u64 = arg_value(args, "--sample-every", "10")
+            .parse()
+            .unwrap_or(10);
+        let moments = run_task_protocol(
+            &cfg,
+            cfg.sim.seed,
+            &brain,
+            &env_name,
+            colony,
+            cticks,
+            warmup.min(cticks),
+            sample_every,
         );
+        println!(
+            "TASK_ALLOCATION env={} brain={} seed={} ticks={} warmup={} samples={}",
+            env_name,
+            brain,
+            cfg.sim.seed,
+            cticks,
+            warmup.min(cticks),
+            moments.foraging.n
+        );
+        println!(
+            "  foraging   mean={:.3} sd={}",
+            moments.foraging.mean,
+            moments.foraging.display_sd()
+        );
+        println!(
+            "  defense    mean={:.3} sd={}",
+            moments.defense.mean,
+            moments.defense.display_sd()
+        );
+        println!(
+            "  brood_care mean={:.3} sd={}",
+            moments.brood_care.mean,
+            moments.brood_care.display_sd()
+        );
+        println!("  note: live State time-budget, not a morphological caste proportion or a species-level fit.");
         return Ok(());
     }
 
@@ -629,11 +875,25 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         for _ in 0..ticks {
             sim.step();
         }
-        let alive_a = sim.ants.iter().filter(|a| a.colony_id == 0 && !a.dead).count() as u32;
-        let alive_b = sim.ants.iter().filter(|a| a.colony_id == 1 && !a.dead).count() as u32;
+        let alive_a = sim
+            .ants
+            .iter()
+            .filter(|a| a.colony_id == 0 && !a.dead)
+            .count() as u32;
+        let alive_b = sim
+            .ants
+            .iter()
+            .filter(|a| a.colony_id == 1 && !a.dead)
+            .count() as u32;
         let cas_a = init_a.saturating_sub(alive_a);
         let cas_b = init_b.saturating_sub(alive_b);
-        let winner = if alive_a == alive_b { "tie" } else if alive_a > alive_b { "A" } else { "B" };
+        let winner = if alive_a == alive_b {
+            "tie"
+        } else if alive_a > alive_b {
+            "A"
+        } else {
+            "B"
+        };
         let both_cas = cas_a > 0 && cas_b > 0;
         println!(
             "WAR ticks={} colony={colony} initA={} initB={} aliveA={} aliveB={} casA={} casB={} winner={} both_casualties={}",
@@ -649,19 +909,21 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         println!("{}", "-".repeat(78));
         println!("{:<34} {:<24} {:<20}", "metric", "model", "literature");
         println!("{}", "-".repeat(78));
-        // model-derived values
+        // Model-derived quantities. These remain illustrative comparisons, not
+        // statistical fits to a species-level data set.
         let half = (std::f32::consts::LN_2 / cfg.genome.trail_decay) as i64;
-        // caste: build a quick colony, count task_jitter<0
         let g = cfg.genome.clone();
-        let mut s = sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &g);
-        s.set_colony_size(400, &g);
-        let nonguard = s.ants.iter().filter(|a| a.task_jitter >= 0.0).count() as f32 / s.ants.len().max(1) as f32;
-        // bridge peak from csv if present
-        let bridge_peak = std::fs::read_to_string("results/bridge.csv").ok().map(|t| {
-            t.lines().skip(1).filter_map(|l| {
-                l.split(',').nth(3).and_then(|x| x.trim().parse::<f32>().ok())
-            }).fold(0.0f32, f32::max)
-        }).unwrap_or(0.0);
+        let task_protocol =
+            run_task_protocol(&cfg, cfg.sim.seed, "fsm", "rich_close", 400, 3000, 1000, 10);
+        let active_forager_fraction = task_protocol.foraging.mean as f32;
+        // The bridge CSV now stores directly observed gate-crossing traffic.
+        // Read its last finite cumulative inbound fraction, never a pheromone ratio.
+        let bridge_fraction = std::fs::read_to_string("results/bridge.csv").ok().and_then(|text| {
+            let mut lines = text.lines();
+            (lines.next() == Some("tick,short_outbound,long_outbound,short_inbound,long_inbound,short_inbound_fraction,collected"))
+                .then(|| lines.filter_map(|line| line.split(',').nth(5)?.trim().parse::<f32>().ok()).next_back())
+                .flatten()
+        });
         // model rows with literature notes (lit.json is the human-readable source)
         // T15.6: CX path-integration drift (bench at dist=40) + MB KC sparsity.
         let cx_world = world::World::new(256, 256, world::Vec2::new(128.0, 128.0), 4.0);
@@ -692,24 +954,75 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             if t >= 200 && t % 20 == 0 {
                 for a in &mb_sim.ants {
                     let act = a.mb_kc_active.min(genome::MB_KC);
-                    let spikes = a.mb_kc_v.iter().take(act).filter(|&&v| v >= kc_thresh).count() as f32;
+                    let spikes = a
+                        .mb_kc_v
+                        .iter()
+                        .take(act)
+                        .filter(|&&v| v >= kc_thresh)
+                        .count() as f32;
                     spike_sum += spikes / act.max(1) as f32;
                     sample_count += 1;
                 }
             }
         }
-        let kc_sparsity = if sample_count > 0 { spike_sum / sample_count as f32 } else { 0.0 };
+        let kc_sparsity = if sample_count > 0 {
+            spike_sum / sample_count as f32
+        } else {
+            0.0
+        };
         let rows: [(&str, String, &str); 10] = [
-            ("bridge_short_path_fraction", format!("{:.2} (peak ratio {:.1}x)", bridge_peak/(bridge_peak+1.0).max(1e-9), bridge_peak), "0.80-0.90"),
-            ("trail_pheromone_halflife", format!("~{} ticks", half), "minutes-hours"),
-            ("active_forager_fraction", format!("{:.2} (caste)", nonguard), "~0.20-0.40"),
-            ("non_forager_caste_fraction", format!("{:.2}", 1.0-nonguard), "species-dependent"),
-            ("brood_care_requires_tending", "nurse->grow / no-nurse->decay".to_string(), "true"),
-            ("path_selection_via_stigmergy", "true (ACO, see --bridge)".to_string(), "true"),
-            ("cx_path_integration_drift", format!("{:.1}% (dist={}, see --bench-cx)", cx_drift, cx_dist), "~5-15% (Cataglyphis)"),
-            ("cx_pi_direction_error", format!("{:.2} deg", cx_dir_err), "a few degrees"),
-            ("mb_kc_sparsity", format!("{:.0}% KC active", kc_sparsity * 100.0), "~5-15% active"),
-            ("mb_associative_learning", "dual-ch dopamine (reward PAM / punish PPL1) gated STDP".to_string(), "true (Drosophila)"),
+            (
+                "bridge_short_path_fraction",
+                bridge_fraction
+                    .map(|value| format!("{value:.2} (actual inbound gate traffic)"))
+                    .unwrap_or_else(|| "NA (run --bridge first)".to_string()),
+                "~0.80-0.90; qualitative only",
+            ),
+            (
+                "trail_pheromone_halflife",
+                format!("~{} ticks", half),
+                "minutes-hours; no tick→time map",
+            ),
+            (
+                "active_forager_fraction",
+                format!("{:.2} (live State time budget)", active_forager_fraction),
+                "~0.20-0.40; definition differs",
+            ),
+            (
+                "non_foraging_state_fraction",
+                format!("{:.2}", 1.0 - active_forager_fraction),
+                "species-/task-dependent",
+            ),
+            (
+                "brood_to_adult_transition",
+                "model population process; not nurse removal".to_string(),
+                "brood care affects development",
+            ),
+            (
+                "path_selection_via_stigmergy",
+                "model gate-flow assay (see --bridge)".to_string(),
+                "qualitative comparison",
+            ),
+            (
+                "cx_path_integration_drift",
+                format!("{:.1}% (dist={}, abstract integrator)", cx_drift, cx_dist),
+                "~5-15% (Cataglyphis; non-isomorphic)",
+            ),
+            (
+                "cx_pi_direction_error",
+                format!("{:.2} deg", cx_dir_err),
+                "not a direct species fit",
+            ),
+            (
+                "mb_kc_sparsity",
+                format!("{:.0}% KC active", kc_sparsity * 100.0),
+                "~5-15% active; abstract mapping",
+            ),
+            (
+                "mb_associative_learning",
+                "dual-valence plasticity proxy".to_string(),
+                "not an odor-conditioning assay",
+            ),
         ];
         for (n, m, l) in rows.iter() {
             println!("{:<34} {:<24} {:<20}", n, m, l);
@@ -736,34 +1049,44 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 .ok()
                 .and_then(|s| toml::from_str(&s).ok())
         };
-        println!("\nFIT (model vs explicit published datapoints, see literature/)");
+        println!("\nDESCRIPTIVE COMPARISON (model vs representative datapoints; see literature/)");
         println!("{}", "-".repeat(78));
-        println!("{:<28} {:<12} {:<18} {:<10} {:<8}", "metric", "model", "lit [range]", "in_range", "abs_err");
+        println!(
+            "{:<28} {:<12} {:<18} {:<10} {:<8}",
+            "metric", "model", "lit [range]", "in_range", "abs_err"
+        );
         println!("{}", "-".repeat(78));
-        // bridge short-path fraction: model = peak_ratio/(1+peak_ratio); lit converged=0.82 [0.80,0.90]
-        let bridge_frac = bridge_peak / (bridge_peak + 1.0).max(1e-9);
+        // These are descriptive, definition-mismatched comparisons; an interval
+        // hit is reported as a number, never as biological validation.
         if let Some(lit) = load_lit("literature/bridge_deneubourg.toml") {
-            if let Some(p) = lit.datapoints.first() {
-                let in_range = bridge_frac >= p.y_lo && bridge_frac <= p.y_hi;
+            if let (Some(p), Some(bridge_fraction)) = (lit.datapoints.first(), bridge_fraction) {
+                let in_range = bridge_fraction >= p.y_lo && bridge_fraction <= p.y_hi;
                 println!(
                     "{:<28} {:<12.2} {:<18} {:<10} {:<8.2}",
-                    "bridge_short_path_fraction", bridge_frac,
+                    "bridge_gate_traffic_fraction",
+                    bridge_fraction,
                     format!("{:.2} [{:.2},{:.2}]", p.y, p.y_lo, p.y_hi),
                     if in_range { "yes" } else { "no" },
-                    (bridge_frac - p.y).abs()
+                    (bridge_fraction - p.y).abs()
+                );
+            } else {
+                println!(
+                    "{:<28} NA (run --bridge first)",
+                    "bridge_gate_traffic_fraction"
                 );
             }
         }
-        // forager fraction: model = nonguard (task_jitter>=0); lit=0.30 [0.20,0.40]
         if let Some(lit) = load_lit("literature/caste_gordon.toml") {
             if let Some(p) = lit.datapoints.first() {
-                let in_range = nonguard >= p.y_lo && nonguard <= p.y_hi;
+                let in_range =
+                    active_forager_fraction >= p.y_lo && active_forager_fraction <= p.y_hi;
                 println!(
                     "{:<28} {:<12.2} {:<18} {:<10} {:<8.2}",
-                    "active_forager_fraction", nonguard,
+                    "active_forager_state_fraction",
+                    active_forager_fraction,
                     format!("{:.2} [{:.2},{:.2}]", p.y, p.y_lo, p.y_hi),
                     if in_range { "yes" } else { "no" },
-                    (nonguard - p.y).abs()
+                    (active_forager_fraction - p.y).abs()
                 );
             }
         }
@@ -784,7 +1107,8 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                     let in_range = drift >= p.y_lo && drift <= p.y_hi;
                     println!(
                         "{:<28} {:<12.2} {:<18} {:<10} {:<8.2}",
-                        format!("cx_pi_drift@dist{}", dist as i32), drift,
+                        format!("cx_pi_drift@dist{}", dist as i32),
+                        drift,
                         format!("{:.0} [{:.0},{:.0}]", p.y, p.y_lo, p.y_hi),
                         if in_range { "yes" } else { "no" },
                         (drift - p.y).abs()
@@ -804,7 +1128,8 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 cfg.world.width as f32,
                 cfg.world.height as f32,
             );
-            let mut mb_sim = sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &g);
+            let mut mb_sim =
+                sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &g);
             mb_sim.brain_mb = true;
             mb_sim.set_colony_size(80, &g);
             mb_sim.apply_environment(&mb_env);
@@ -827,31 +1152,61 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 let in_range = ratio >= p.y_lo && ratio <= p.y_hi;
                 println!(
                     "{:<28} {:<12.2} {:<18} {:<10} {:<8.2}",
-                    "mb_learning_ratio(late/early)", ratio,
+                    "mb_learning_ratio(late/early)",
+                    ratio,
                     format!("{:.1} [{:.1},{:.1}]", p.y, p.y_lo, p.y_hi),
                     if in_range { "yes" } else { "no" },
                     (ratio - p.y).abs()
                 );
             }
         }
-        println!("{}\nnote: literature values are representative published order-of-magnitude (see literature.json + literature/*.toml datapoints, with sources + caveats), not a verified per-colony dataset fit.", "-".repeat(78));
+        println!("{}\nnote: literature values are representative context anchors, not a verified per-colony statistical fit. An interval hit is descriptive only: bridge, task, CX, and MB readouts differ materially from their biological counterparts (see literature/*.toml and docs/research_scope.md).", "-".repeat(78));
         return Ok(());
     }
 
     if args.iter().any(|a| a == "--ablate") {
-        // T22: ablation / sufficiency experiment. Disables one mechanism and
-        // measures the behavioral consequence vs baseline, printing a
-        // falsifiable prediction mapped to a real intervention. The sim is a
-        // sufficiency/ablation engine: "mechanism X is sufficient for behavior
-        // Y" becomes "ablate X -> Y degrades by Z% -> predict real intervention
-        // (OA knockdown / pheromone disruption / nurse removal) does the same".
+        // Paired, model-internal counterfactual: both conditions share a seed
+        // within each replicate. The implementation switch is not a wet-lab
+        // intervention and does not establish biological sufficiency/necessity.
         let mech = arg_value(args, "--ablate", "");
+        let known = [
+            "octopamine",
+            "trail",
+            "eclosion",
+            "homevector",
+            "vision",
+            "stdp",
+            "reward",
+            "punish",
+        ];
+        if !known.contains(&mech.as_str()) {
+            anyhow::bail!(
+                "unknown --ablate mechanism '{mech}'; use {}",
+                known.join("|")
+            );
+        }
         let env_name = arg_value(args, "--env", "rich_close");
         let aticks: u64 = arg_value(args, "--ticks", "3000").parse().unwrap_or(3000);
         let colony: usize = arg_value(args, "--colony", "200").parse().unwrap_or(200);
+        // `--n-seeds` is the documented spelling. Keep `--reps` as a
+        // compatibility alias so an intended repeated ablation cannot silently
+        // degrade to a single-seed run.
+        let replicate_arg = if args.iter().any(|arg| arg == "--n-seeds") {
+            arg_value(args, "--n-seeds", "1")
+        } else {
+            arg_value(args, "--reps", "1")
+        };
+        let replicates: usize = replicate_arg.parse().unwrap_or(1).max(1);
         let learning = matches!(mech.as_str(), "stdp" | "reward" | "punish");
-        let brain = if learning { "mb".to_string() } else { arg_value(args, "--brain", "fsm") };
-        let run = |ablate: bool| -> (f32, usize, f32) {
+        let requested_brain = arg_value(args, "--brain", "fsm");
+        let brain = if learning {
+            "mb".to_string()
+        } else {
+            requested_brain
+        };
+        let food_amount: f32 = arg_value(args, "--food-amount", "0").parse().unwrap_or(0.0);
+        let out_path = arg_value(args, "--out", "");
+        let run = |seed: u64, ablated: bool| -> AblationReadout {
             let g = cfg.genome.clone();
             let env = environment::Environment::build(
                 &env_name,
@@ -859,132 +1214,171 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 cfg.world.width as f32,
                 cfg.world.height as f32,
             );
-            let mut sim = sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &g);
-            sim.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
-            sim.world.nest_radius = cfg.world.nest_radius;
-            sim.brain_ann = brain == "ann" || brain == "cppn";
-            sim.brain_snn = brain == "snn";
-            sim.brain_mb = brain == "mb";
-            sim.brain_cx = brain == "cx";
-            sim.ablate_octopamine = ablate && mech == "octopamine";
-            sim.ablate_trail = ablate && mech == "trail";
-            sim.ablate_eclosion = ablate && mech == "eclosion";
-            sim.ablate_homevector = ablate && mech == "homevector";
-            sim.ablate_vision = ablate && mech == "vision";
-            sim.ablate_stdp = ablate && mech == "stdp";
-            sim.ablate_reward = ablate && mech == "reward";
-            sim.ablate_punish = ablate && mech == "punish";
+            let mut simulator = sim::Simulator::new(cfg.world.width, cfg.world.height, seed, &g);
+            simulator.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
+            simulator.world.nest_radius = cfg.world.nest_radius;
+            apply_brain(&mut simulator, &brain);
+            configure_ablation(&mut simulator, &mech, ablated);
             if mech == "punish" {
-                // punish pathway needs both foraging (KC activity) AND damage
-                // (war) so aversive LTD has something to act on.
-                sim.apply_environment(&env);
-                sim.war = true;
-                sim.set_two_colonies(colony / 2, &g, &g.mutate(&mut rand_chacha::ChaCha8Rng::seed_from_u64(1)));
+                simulator.apply_environment(&env);
+                simulator.war = true;
+                let mut competitor_rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed ^ 0xA11CE);
+                let competitor = g.mutate(&mut competitor_rng);
+                simulator.set_two_colonies(colony, &g, &competitor);
             } else {
-                sim.set_colony_size(colony, &g);
-                sim.apply_environment(&env);
+                simulator.set_colony_size(colony, &g);
+                simulator.apply_environment(&env);
             }
-            // T23: optional food-amount override (bias test: limited food
-            // penalizes over-convergence, exposing whether trail-hurts is an
-            // infinite-food artifact).
-            let food_amt: f32 = arg_value(args, "--food-amount", "0").parse().unwrap_or(0.0);
-            if food_amt > 0.0 {
-                for f in sim.world.food.iter_mut() {
-                    f.amount = food_amt;
+            if food_amount > 0.0 {
+                for food in &mut simulator.world.food {
+                    food.amount = food_amount;
                 }
             }
-            let init_w: Vec<f32> = sim.ants.first().map(|a| a.learned_mb_w.clone()).unwrap_or_default();
-            let mut max_alive = sim.ants.len();
+            let initial_weights = simulator
+                .ants
+                .first()
+                .map(|ant| ant.learned_mb_w.clone())
+                .unwrap_or_default();
+            let mut max_alive = simulator.ants.len();
             for _ in 0..aticks {
-                sim.step();
-                if sim.ants.len() > max_alive {
-                    max_alive = sim.ants.len();
-                }
+                simulator.step();
+                max_alive = max_alive.max(simulator.ants.len());
             }
-            let drift = if init_w.is_empty() || sim.ants.is_empty() {
+            let weight_drift = if initial_weights.is_empty() || simulator.ants.is_empty() {
                 0.0
             } else {
-                let n = init_w.len().max(1);
-                sim.ants
+                let n = initial_weights.len().max(1) as f32;
+                simulator
+                    .ants
                     .iter()
-                    .map(|a| {
-                        let s: f32 = a
+                    .map(|ant| {
+                        let squared_error: f32 = ant
                             .learned_mb_w
                             .iter()
-                            .zip(init_w.iter())
-                            .map(|(x, y)| (x - y).powi(2))
+                            .zip(&initial_weights)
+                            .map(|(current, initial)| (current - initial).powi(2))
                             .sum();
-                        (s / n as f32).sqrt()
+                        (squared_error / n).sqrt()
                     })
                     .sum::<f32>()
-                    / sim.ants.len() as f32
+                    / simulator.ants.len() as f32
             };
-            (sim.collected, max_alive, drift)
+            AblationReadout {
+                collected: simulator.collected as f64,
+                max_alive: max_alive as f64,
+                final_alive: simulator.ants.len() as f64,
+                weight_drift: weight_drift as f64,
+            }
         };
-        let (base_col, base_max, base_drift) = run(false);
-        let (abl_col, abl_max, abl_drift) = run(true);
-        let dcol_pct = if base_col > 1e-9 { 100.0 * (abl_col - base_col) / base_col } else { 0.0 };
-        let dgrow_pct = if base_max > 0 { 100.0 * (abl_max as f32 - base_max as f32) / base_max as f32 } else { 0.0 };
-        let ddrift_pct = if base_drift > 1e-9 { 100.0 * (abl_drift - base_drift) / base_drift } else { 0.0 };
-        println!("ABLATE mech={} env={} brain={} ticks={} colony={} readout={}", mech, env_name, brain, aticks, colony, if learning { "weight_drift" } else { "behavioral" });
-        println!("{}", "-".repeat(70));
-        if learning {
-            println!("{:<14} {:<14} {:<12} {:<12}", "", "weight_drift", "collected", "max_alive");
-            println!("{:<14} {:<14.4} {:<12.1} {:<12}", "baseline", base_drift, base_col, base_max);
-            println!("{:<14} {:<14.4} {:<12.1} {:<12}", "ablated", abl_drift, abl_col, abl_max);
-            println!("{:<14} {:<13.1}%", "delta_drift", ddrift_pct);
-        } else {
-            println!("{:<14} {:<12} {:<12}", "", "collected", "max_alive");
-            println!("{:<14} {:<12.1} {:<12}", "baseline", base_col, base_max);
-            println!("{:<14} {:<12.1} {:<12}", "ablated", abl_col, abl_max);
-            println!("{:<14} {:<11.1}% {:<11.1}%", "delta", dcol_pct, dgrow_pct);
+
+        let mut base_collected = Moments::default();
+        let mut abl_collected = Moments::default();
+        let mut delta_collected_pct = Moments::default();
+        let mut base_max_alive = Moments::default();
+        let mut abl_max_alive = Moments::default();
+        let mut delta_max_alive_pct = Moments::default();
+        let mut base_final_alive = Moments::default();
+        let mut abl_final_alive = Moments::default();
+        let mut delta_final_alive_pct = Moments::default();
+        let mut base_drift = Moments::default();
+        let mut abl_drift = Moments::default();
+        let mut delta_drift_pct = Moments::default();
+        let mut raw_csv =
+            String::from("seed,condition,collected,max_alive,final_alive,weight_drift\n");
+        for replicate in 0..replicates {
+            let seed = cfg.sim.seed.wrapping_add(replicate as u64 * 0x1000_0003);
+            let baseline = run(seed, false);
+            let ablated = run(seed, true);
+            for (condition, readout) in [("baseline", baseline), ("ablated", ablated)] {
+                raw_csv.push_str(&format!(
+                    "{seed},{condition},{:.6},{:.6},{:.6},{:.6}\n",
+                    readout.collected, readout.max_alive, readout.final_alive, readout.weight_drift
+                ));
+            }
+            base_collected.push(baseline.collected);
+            abl_collected.push(ablated.collected);
+            base_max_alive.push(baseline.max_alive);
+            abl_max_alive.push(ablated.max_alive);
+            base_final_alive.push(baseline.final_alive);
+            abl_final_alive.push(ablated.final_alive);
+            base_drift.push(baseline.weight_drift);
+            abl_drift.push(ablated.weight_drift);
+            if baseline.collected > f64::EPSILON {
+                delta_collected_pct
+                    .push(100.0 * (ablated.collected - baseline.collected) / baseline.collected);
+            }
+            if baseline.max_alive > f64::EPSILON {
+                delta_max_alive_pct
+                    .push(100.0 * (ablated.max_alive - baseline.max_alive) / baseline.max_alive);
+            }
+            if baseline.final_alive > f64::EPSILON {
+                delta_final_alive_pct.push(
+                    100.0 * (ablated.final_alive - baseline.final_alive) / baseline.final_alive,
+                );
+            }
+            if baseline.weight_drift > f64::EPSILON {
+                delta_drift_pct.push(
+                    100.0 * (ablated.weight_drift - baseline.weight_drift) / baseline.weight_drift,
+                );
+            }
         }
-        println!("{}", "-".repeat(70));
-        let prediction = match mech.as_str() {
-            "octopamine" => format!(
-                "PREDICTION: octopaminergic arousal is sufficient for foraging vigor — ablation changes \
-                collected by {:+.0}%. Wet-lab: octopamine-receptor knockdown / tyraminergic silencing \
-                should reduce exploration and foraging rate (testable).", dcol_pct),
-            "trail" => format!(
-                "PREDICTION: stigmergic Trail trades path-quality for throughput — ablation changes \
-                collected by {:+.0}%. Trail over-converges foragers (bottleneck); ablation disperses \
-                -> higher yield (counterintuitive). Wet-lab: trail-pheromone disruption should shift yield \
-                same direction, env-dependent (testable).", dcol_pct),
-            "eclosion" => format!(
-                "PREDICTION: brood eclosion is sufficient for colony expansion — ablation changes \
-                max_alive growth by {:+.0}%. Wet-lab: nurse removal / brood-care disruption should halt \
-                colony growth (testable).", dgrow_pct),
-            "homevector" => format!(
-                "PREDICTION: path integration is sufficient for non-visual homing — ablation changes \
-                collected by {:+.0}%. Wet-lab: CX / stride-integrator lesion should impair homing and \
-                reduce foraging yield (testable).", dcol_pct),
-            "vision" => format!(
-                "PREDICTION: visual detection is sufficient for visual-beeline foraging — ablation changes \
-                collected by {:+.0}%. Wet-lab: compound-eye ablation / landmark occlusion should reduce \
-                foraging rate in visual-dependent species (testable).", dcol_pct),
-            "stdp" => format!(
-                "PREDICTION: lifetime synaptic plasticity (STDP) is sufficient for within-lifetime learning \
-                — ablation changes KC→output weight drift by {:+.0}%. Wet-lab: MBON plasticity blockade / \
-                NMDA-R interference should abolish within-lifetime olfactory learning (testable).", ddrift_pct),
-            "reward" => format!(
-                "PREDICTION: reward-dopamine (PAM) is sufficient for appetitive LTP — ablation changes \
-                weight drift by {:+.0}%. Wet-lab: PAM-DAN silencing should impair appetitive memory \
-                (Drosophila odor-sugar conditioning) (testable).", ddrift_pct),
-            "punish" => format!(
-                "PREDICTION: punish-dopamine (PPL1) is sufficient for aversive LTD — ablation changes \
-                weight drift by {:+.0}%. Wet-lab: PPL1-DAN silencing should impair aversive memory \
-                (Drosophila odor-shock conditioning) (testable).", ddrift_pct),
-            _ => "unknown mech (use octopamine|trail|eclosion|homevector|vision|stdp|reward|punish)".to_string(),
+        if !out_path.is_empty() {
+            std::fs::write(&out_path, raw_csv)?;
+            println!("saved paired replicate data: {out_path}");
+        }
+        println!("ABLATE_MODEL_SENSITIVITY mechanism={} env={} brain_effective={} brain_requested={} ticks={} colony={} paired_replicates={}", mech, env_name, brain, arg_value(args, "--brain", "fsm"), aticks, colony, replicates);
+        println!(
+            "{:<20} {:>16} {:>16} {:>18}",
+            "metric", "baseline mean±sd", "ablated mean±sd", "paired Δ% mean±sd"
+        );
+        let show = |label: &str, baseline: Moments, ablated: Moments, delta: Moments| {
+            let delta_value = if delta.display_count() > 0 {
+                format!("{:+.3}±{}", delta.mean, delta.display_sd())
+            } else {
+                "NA (n=0)".to_string()
+            };
+            println!(
+                "{:<20} {:>8.3}±{:<6} {:>8.3}±{:<6} {:>18}",
+                label,
+                baseline.mean,
+                baseline.display_sd(),
+                ablated.mean,
+                ablated.display_sd(),
+                delta_value
+            );
         };
-        println!("{}", prediction);
+        show(
+            "collected",
+            base_collected,
+            abl_collected,
+            delta_collected_pct,
+        );
+        show(
+            "max_alive",
+            base_max_alive,
+            abl_max_alive,
+            delta_max_alive_pct,
+        );
+        show(
+            "final_alive",
+            base_final_alive,
+            abl_final_alive,
+            delta_final_alive_pct,
+        );
+        if learning {
+            show("weight_drift", base_drift, abl_drift, delta_drift_pct);
+            println!("  note: weight_drift is an internal plasticity-state proxy, not a behavioral memory assay.");
+        }
+        println!("MODEL SCOPE: paired counterfactual sensitivity in this abstract implementation only; it does not establish biological sufficiency, necessity, a wet-lab intervention mapping, or a species-level effect size.");
+        println!("EXTERNAL HYPOTHESIS: define a species-, circuit-, and task-specific perturbation separately, then test its direction with appropriate controls.");
         return Ok(());
     }
 
     if args.iter().any(|a| a == "--validate") {
         // T20: behavioral-emergence + robustness battery. Runs each brain in
-        // each env for vticks (default 3000), samples per 100t, and checks
-        // colony-level emergence: survival, trail-network formation, caste
-        // stability, colony growth (eclosion), sustained foraging. Honest
+        // each env for vticks (default 3000), samples per 100t after a warmup,
+        // and checks colony-level emergence: survival, trail-network formation,
+        // live task-budget stability, colony growth, sustained foraging. Honest
         // internal-plausibility / qualitative-emergence check — NOT a
         // quantitative match to a specific ant species (model is illustrative,
         // tick<->seconds undefined; see literature/*.toml for the quantitative
@@ -1015,7 +1409,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         println!("{}", "-".repeat(86));
         println!(
             "{:<6} {:<12} {:<7} {:<6} {:<6} {:<6} {:<6} {:<5}",
-            "brain", "env", "surv", "trail", "caste", "grew", "forag", "pass"
+            "brain", "env", "surv", "trail", "tasks", "grew", "forag", "pass"
         );
         println!("{}", "-".repeat(86));
         let mut report = String::new();
@@ -1025,7 +1419,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             brains, envs, vticks, colony
         ));
         report.push_str("- 诚实边界：这是**内部行为合理性 + 定性涌现**验证，非与某物种定量一致（模型示意级、tick↔秒无量纲；定量锚点见 literature/*.toml + --compare-lit）。\n\n");
-        report.push_str("| brain | env | survival | trail_formed | caste_stable | colony_grew | foraging | pass |\n");
+        report.push_str("| brain | env | survival | trail_formed | task_budget_stable | colony_grew | foraging | pass |\n");
         report.push_str("|---|---|---|---|---|---|---|---|\n");
         let mut total_pass = 0usize;
         let mut total_runs = 0usize;
@@ -1055,12 +1449,8 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 if b == "cppn" {
                     g.ann_weights = crate::genome::develop_phenotype(&g);
                 }
-                let mut sim = sim::Simulator::new(
-                    cfg.world.width,
-                    cfg.world.height,
-                    cfg.sim.seed,
-                    &g,
-                );
+                let mut sim =
+                    sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &g);
                 sim.set_colony_size(colony, &g);
                 sim.world.nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
                 sim.world.nest_radius = cfg.world.nest_radius;
@@ -1072,23 +1462,26 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 let initial = sim.ants.len() as f32;
                 let mut alive: Vec<f32> = Vec::new();
                 let mut coll: Vec<f32> = Vec::new();
-                let mut guard: Vec<f32> = Vec::new();
+                let mut task_foraging: Vec<f32> = Vec::new();
+                let mut task_defense: Vec<f32> = Vec::new();
+                let mut task_brood: Vec<f32> = Vec::new();
                 let mut trail: Vec<f32> = Vec::new();
                 for t in 0..vticks {
                     sim.step();
-                    if t % 100 == 0 {
-                        let n = sim.ants.len().max(1) as f32;
-                        let gf = sim.ants.iter().filter(|a| a.task_jitter < 0.0).count() as f32 / n;
+                    if t >= vticks / 3 && t % 100 == 0 {
+                        let tasks = sim::TaskFractions::from_ants(&sim.ants);
                         let tt = sim
                             .world
                             .field
                             .channel_slice(world::Channel::Trail)
                             .iter()
-                            .map(|&v| v as f32)
+                            .copied()
                             .sum();
                         alive.push(sim.ants.len() as f32);
                         coll.push(sim.collected);
-                        guard.push(gf);
+                        task_foraging.push(tasks.foraging);
+                        task_defense.push(tasks.defense);
+                        task_brood.push(tasks.brood_care);
                         trail.push(tt);
                     }
                 }
@@ -1101,38 +1494,60 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
                 // the network consolidates onto fewer efficient cells — that
                 // consolidation is good, so we don't require trail_last near peak.
                 let trail_formed = trail_peak > 2.0 && trail_last > 1.0;
-                let caste_stable = {
-                    let m = guard.iter().sum::<f32>() / guard.len().max(1) as f32;
-                    let var = guard.iter().map(|&v| (v - m).powi(2)).sum::<f32>()
-                        / guard.len().max(1) as f32;
-                    var.sqrt() < 0.10
+                let task_budget_stable = {
+                    let stable = |series: &[f32]| {
+                        if series.len() < 2 {
+                            return false;
+                        }
+                        let mean = series.iter().sum::<f32>() / series.len() as f32;
+                        let variance = series
+                            .iter()
+                            .map(|&value| (value - mean).powi(2))
+                            .sum::<f32>()
+                            / series.len().max(1) as f32;
+                        variance.sqrt() < 0.10
+                    };
+                    stable(&task_foraging) && stable(&task_defense) && stable(&task_brood)
                 };
                 let colony_grew = alive.iter().cloned().fold(0.0f32, f32::max) > initial * 1.05;
                 let foraging = {
                     let last = coll.last().copied().unwrap_or(0.0);
-                    let prev = coll.get(coll.len().saturating_sub(5)).copied().unwrap_or(0.0);
+                    let prev = coll
+                        .get(coll.len().saturating_sub(5))
+                        .copied()
+                        .unwrap_or(0.0);
                     last - prev > 0.0
                 };
-                let npass = [survival > 0.1, trail_formed, caste_stable, colony_grew, foraging]
-                    .iter()
-                    .filter(|&&p| p)
-                    .count();
+                let npass = [
+                    survival > 0.1,
+                    trail_formed,
+                    task_budget_stable,
+                    colony_grew,
+                    foraging,
+                ]
+                .iter()
+                .filter(|&&p| p)
+                .count();
                 total_pass += npass;
                 total_runs += 1;
                 println!(
                     "{:<6} {:<12} {:<7.2} {:<6} {:<6} {:<6} {:<6} {:<2}/5",
-                    b, e, survival,
+                    b,
+                    e,
+                    survival,
                     if trail_formed { "Y" } else { "-" },
-                    if caste_stable { "Y" } else { "-" },
+                    if task_budget_stable { "Y" } else { "-" },
                     if colony_grew { "Y" } else { "-" },
                     if foraging { "Y" } else { "-" },
                     npass
                 );
                 report.push_str(&format!(
                     "| {} | {} | {:.2} | {} | {} | {} | {} | {}/5 |\n",
-                    b, e, survival,
+                    b,
+                    e,
+                    survival,
                     if trail_formed { "Y" } else { "-" },
-                    if caste_stable { "Y" } else { "-" },
+                    if task_budget_stable { "Y" } else { "-" },
                     if colony_grew { "Y" } else { "-" },
                     if foraging { "Y" } else { "-" },
                     npass
@@ -1153,7 +1568,7 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
             100.0 * total_pass as f64 / (total_runs * 5).max(1) as f64
         ));
         report.push_str(
-            "\n## 判据\n- survival>0.1（蚁群存续）\n- trail_formed：trail_total 峰值>2（网络形成）且末值>1（仍存在；峰值后下降是网络 consolidated 到更少高效 cell，非坍塌）\n- caste_stable：guard 占比标准差<0.10（分工稳态）\n- colony_grew：峰值活蚁>1.05·初始（eclosion 增长）\n- foraging：末 500t 仍有交付（持续觅食）\n\n## 诚实评估\n这是**内部行为合理性 + 定性涌现**验证（默认未演化基因组）。定性涌现（trail 形成、分工稳态、蚁群增长、持续觅食）对照真蚁行为模式；rich_close（食物近且多）6 脑均涌现良好，hard env（scarce_far/maze）默认脑全饿死——这是**需演化适配**而非模型故障：cross-brain EVOLVED sweep（results/cross_brain_evolution_summary.txt）显示演化脑在硬环境能收集。定量一致性受模型示意级定位与 tick↔秒无量纲化限制（见 literature/*.toml + --compare-lit 的定量锚点）。ann 与 cppn 在未演化默认基因组下结果一致（cppn 零基因 = ann 种子）。\n",
+            "\n## 判据\n- survival>0.1（蚁群存续）\n- trail_formed：trail_total 峰值>2（网络形成）且末值>1（仍存在；峰值后下降可能是网络压缩，而非必然坍塌）\n- task_budget_stable：实时行为状态（觅食/防御/育幼）三个时间序列的标准差均<0.10；这不是形态品级或物种级分工比例\n- colony_grew：峰值活蚁>1.05·初始（模型的 brood→adult 人口过程）\n- foraging：末 500t 仍有交付（持续觅食）\n\n## 诚实评估\n这是**内部行为合理性 + 定性涌现**检查，非物种级定量验证。行为状态、抽象信息素、brood→adult 转换与真实蚂蚁的任务、化学或发育过程并非一一对应；定量锚点只能作为上下文，不能据区间命中宣称验证（见 `literature/*.toml`、`--compare-lit` 与 `docs/research_scope.md`）。\n",
         );
         let _ = std::fs::write("results/validate.md", report);
         println!("saved: results/validate.md");
@@ -1180,17 +1595,25 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         for t in 0..total_ticks {
             sim.step();
             if t % stride == 0 && fr.len() < frames {
-                let snap: Vec<(i32, i32, u8)> = sim.ants.iter().map(|a| (a.pos.x as i32, a.pos.y as i32, a.colony_id)).collect();
+                let snap: Vec<(i32, i32, u8)> = sim
+                    .ants
+                    .iter()
+                    .map(|a| (a.pos.x as i32, a.pos.y as i32, a.colony_id))
+                    .collect();
                 fr.push(snap);
             }
         }
         // build JSON
         let mut j = String::from("[");
         for (i, snap) in fr.iter().enumerate() {
-            if i > 0 { j.push(','); }
+            if i > 0 {
+                j.push(',');
+            }
             j.push('[');
             for (k, (x, y, c)) in snap.iter().enumerate() {
-                if k > 0 { j.push(','); }
+                if k > 0 {
+                    j.push(',');
+                }
                 j.push_str(&format!("[{},{},{}]", x, y, c));
             }
             j.push(']');
@@ -1199,7 +1622,9 @@ fn run_headless(args: &[String], cfg: config::Config) -> anyhow::Result<()> {
         let food_json = {
             let mut s = String::from("[");
             for (k, (x, y)) in food.iter().enumerate() {
-                if k > 0 { s.push(','); }
+                if k > 0 {
+                    s.push(',');
+                }
                 s.push_str(&format!("[{:.0},{:.0}]", x, y));
             }
             s.push(']');
@@ -1231,7 +1656,13 @@ draw();
             .replace("__FOOD__", &food_json);
         let _ = std::fs::write(&out, html);
         let sz = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-        println!("EXPORT-HTML {} frames={} ants/frame~{} bytes={}", out, fr.len(), colony, sz);
+        println!(
+            "EXPORT-HTML {} frames={} ants/frame~{} bytes={}",
+            out,
+            fr.len(),
+            colony,
+            sz
+        );
         return Ok(());
     }
 
@@ -1242,14 +1673,24 @@ draw();
         let mut genome_a = cfg.genome.clone();
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed ^ 0xC0E);
         let nest = world::Vec2::new(cfg.world.nest_x, cfg.world.nest_y);
-        let env = environment::Environment::build("rich_close", nest, cfg.world.width as f32, cfg.world.height as f32);
+        let env = environment::Environment::build(
+            "rich_close",
+            nest,
+            cfg.world.width as f32,
+            cfg.world.height as f32,
+        );
         println!("COEVOLVE rounds={rounds} colony={colony} seed={seed} (champion A vs mutant B, limited food)");
         let mut last_winner = 'A';
         let mut flips = 0;
         let mut champ_best = 0.0f32;
         for r in 0..rounds {
             let genome_b = genome_a.mutate(&mut rng);
-            let mut sim = sim::Simulator::new(cfg.world.width, cfg.world.height, seed.wrapping_add(r as u64), &genome_a);
+            let mut sim = sim::Simulator::new(
+                cfg.world.width,
+                cfg.world.height,
+                seed.wrapping_add(r as u64),
+                &genome_a,
+            );
             sim.world.nest = nest;
             sim.world.nest_radius = cfg.world.nest_radius;
             sim.apply_environment(&env);
@@ -1272,16 +1713,28 @@ draw();
                 genome_a = genome_b;
             }
             champ_best = champ_best.max(ca.max(cb));
-            println!("  round {:<2} A={:.0} B={:.0} winner={} champ_best={:.0}", r, ca, cb, winner, champ_best);
+            println!(
+                "  round {:<2} A={:.0} B={:.0} winner={} champ_best={:.0}",
+                r, ca, cb, winner, champ_best
+            );
         }
         let improving = champ_best > 0.0;
         println!(
             "COEVOLVE {} champ_best={:.0} flips={} (arms-race迹象: winner身份变动)",
-            if improving { "PASS" } else { "FAIL" }, champ_best, flips
+            if improving { "PASS" } else { "FAIL" },
+            champ_best,
+            flips
         );
         let _ = std::fs::create_dir_all("results");
-        let _ = std::fs::write(format!("results/coevolve_{}.toml", cfg.sim.seed),
-            toml::to_string_pretty(&config::Config { genome: genome_a, world: cfg.world.clone(), sim: cfg.sim.clone() }).unwrap_or_default());
+        let _ = std::fs::write(
+            format!("results/coevolve_{}.toml", cfg.sim.seed),
+            toml::to_string_pretty(&config::Config {
+                genome: genome_a,
+                world: cfg.world.clone(),
+                sim: cfg.sim.clone(),
+            })
+            .unwrap_or_default(),
+        );
         return Ok(());
     }
 
@@ -1303,7 +1756,11 @@ draw();
         for _ in 0..ticks {
             sim.step();
         }
-        let nurses = sim.ants.iter().filter(|a| matches!(a.state, crate::ant::State::Nurse)).count();
+        let nurses = sim
+            .ants
+            .iter()
+            .filter(|a| matches!(a.state, crate::ant::State::Nurse))
+            .count();
         let tend = sim.ants.iter().map(|a| a.pending_brood).sum::<f32>();
         let final_ants = sim.ants.len();
         let ecloded = final_ants > init_ants;
@@ -1324,12 +1781,44 @@ draw();
             "{:<12} {:>10} {:>10} {:>9} {:>8} {:>8} {:>8}",
             "env", "default_s", "champ_s", "coll", "eff/tick", "deffrac", "fs"
         );
-        let mut csv = String::from("env,default_score,champ_score,collected,efficiency,def_frac,follow_strength\n");
+        let mut csv = String::from(
+            "env,default_score,champ_score,collected,efficiency,def_frac,follow_strength\n",
+        );
         for (name, _desc) in environment::Environment::presets() {
-            let env = environment::Environment::build(name, nest, cfg.world.width as f32, cfg.world.height as f32);
-            let default_fit = evolution::evaluate(&cfg, &env, &cfg.genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
-            let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{name}.toml")).unwrap_or_else(|_| cfg.clone());
-            let champ_fit = evolution::evaluate(&champ_cfg, &env, &champ_cfg.genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+            let env = environment::Environment::build(
+                name,
+                nest,
+                cfg.world.width as f32,
+                cfg.world.height as f32,
+            );
+            let default_fit = evolution::evaluate(
+                &cfg,
+                &env,
+                &cfg.genome,
+                ticks,
+                colony,
+                brain_ann,
+                brain_cppn,
+                brain_snn,
+                brain_mb,
+                brain_cx,
+                seasonal,
+            );
+            let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{name}.toml"))
+                .unwrap_or_else(|_| cfg.clone());
+            let champ_fit = evolution::evaluate(
+                &champ_cfg,
+                &env,
+                &champ_cfg.genome,
+                ticks,
+                colony,
+                brain_ann,
+                brain_cppn,
+                brain_snn,
+                brain_mb,
+                brain_cx,
+                seasonal,
+            );
             let eff = champ_fit.collected / ticks as f32;
             println!(
                 "{:<12} {:>10.1} {:>10.1} {:>9.0} {:>8.3} {:>8.3} {:>8.3}",
@@ -1375,8 +1864,8 @@ draw();
         csv.push('\n');
         // load each champion, evaluate in every env
         for (origin, _) in &presets {
-            let champ_cfg =
-                config::Config::load(&format!("{out_dir}/evolved_{origin}.toml")).unwrap_or_else(|_| cfg.clone());
+            let champ_cfg = config::Config::load(&format!("{out_dir}/evolved_{origin}.toml"))
+                .unwrap_or_else(|_| cfg.clone());
             print!("{:<14}", origin);
             csv.push_str(origin);
             for (target, _) in &presets {
@@ -1386,7 +1875,19 @@ draw();
                     cfg.world.width as f32,
                     cfg.world.height as f32,
                 );
-                let fit = evolution::evaluate(&champ_cfg, &env, &champ_cfg.genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+                let fit = evolution::evaluate(
+                    &champ_cfg,
+                    &env,
+                    &champ_cfg.genome,
+                    ticks,
+                    colony,
+                    brain_ann,
+                    brain_cppn,
+                    brain_snn,
+                    brain_mb,
+                    brain_cx,
+                    seasonal,
+                );
                 print!(" {:>10.1}", fit.score);
                 csv.push_str(&format!(",{:.1}", fit.score));
             }
@@ -1394,7 +1895,9 @@ draw();
             csv.push('\n');
         }
         let _ = std::fs::write(format!("{out_dir}/transfer.csv"), csv);
-        println!("  saved: {out_dir}/transfer.csv  (diagonal = native env; off-diagonal = transfer)");
+        println!(
+            "  saved: {out_dir}/transfer.csv  (diagonal = native env; off-diagonal = transfer)"
+        );
         return Ok(());
     }
 
@@ -1414,15 +1917,56 @@ draw();
             for k in 0..n_seeds {
                 let mut cfgk = cfg.clone();
                 cfgk.sim.seed = cfg.sim.seed.wrapping_add(k as u64 * 0x1000_0003);
-                per.push(evolution::evaluate(&cfgk, &env, &cfg.genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal).score);
+                per.push(
+                    evolution::evaluate(
+                        &cfgk,
+                        &env,
+                        &cfg.genome,
+                        ticks,
+                        colony,
+                        brain_ann,
+                        brain_cppn,
+                        brain_snn,
+                        brain_mb,
+                        brain_cx,
+                        seasonal,
+                    )
+                    .score,
+                );
             }
             let mean = per.iter().sum::<f32>() / per.len() as f32;
-            let (mn, mx) = per.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
-            println!("FITNESS env={} n_seeds={n_seeds} ticks={ticks} colony={colony}", env.name);
-            println!("  per-seed scores: {:?}", per.iter().map(|v| format!("{:.1}", v)).collect::<Vec<_>>());
-            println!("  mean={mean:.2} range=[{mn:.1},{mx:.1}] spread={:.1}", mx - mn);
+            let (mn, mx) = per
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+                    (a.min(*v), b.max(*v))
+                });
+            println!(
+                "FITNESS env={} n_seeds={n_seeds} ticks={ticks} colony={colony}",
+                env.name
+            );
+            println!(
+                "  per-seed scores: {:?}",
+                per.iter().map(|v| format!("{:.1}", v)).collect::<Vec<_>>()
+            );
+            println!(
+                "  mean={mean:.2} range=[{mn:.1},{mx:.1}] spread={:.1}",
+                mx - mn
+            );
         }
-        let fit = evolution::evaluate_multi(&cfg, &env, &cfg.genome, ticks, colony, n_seeds, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+        let fit = evolution::evaluate_multi(
+            &cfg,
+            &env,
+            &cfg.genome,
+            ticks,
+            colony,
+            n_seeds,
+            brain_ann,
+            brain_cppn,
+            brain_snn,
+            brain_mb,
+            brain_cx,
+            seasonal,
+        );
         println!(
             "  collected={:.1} score={:.2} mean_def_frac={:.3} survival={:.3} trail_total={:.1} per_source={:?}",
             fit.collected, fit.score, fit.mean_def_frac, fit.survival, fit.trail_total, fit.per_source
@@ -1449,23 +1993,39 @@ draw();
             parent = child;
         }
         let pass = bad == 0;
-        println!("GENOME-OPS {} (n={n} bad={bad})", if pass { "PASS" } else { "FAIL" }, );
+        println!(
+            "GENOME-OPS {} (n={n} bad={bad})",
+            if pass { "PASS" } else { "FAIL" },
+        );
         println!("  final genome in_range={}", parent.in_range());
-        println!("  sample: follow_strength={:.3} explore_rate={:.3} aggression={:.3}",
-            parent.follow_strength, parent.explore_rate, parent.aggression);
-        return if pass { Ok(()) } else { Err(anyhow::anyhow!("genome field out of range")) };
+        println!(
+            "  sample: follow_strength={:.3} explore_rate={:.3} aggression={:.3}",
+            parent.follow_strength, parent.explore_rate, parent.aggression
+        );
+        return if pass {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("genome field out of range"))
+        };
     }
 
     if args.iter().any(|a| a == "--inspect-diversity") {
         // Build two colonies (homo + diverse) and compare genome-field spread.
         let n: usize = arg_value(args, "--colony", "300").parse().unwrap_or(300);
-        let mut homo = sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
+        let mut homo =
+            sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
         homo.set_colony_size(n, &cfg.genome);
-        let mut div = sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
+        let mut div =
+            sim::Simulator::new(cfg.world.width, cfg.world.height, cfg.sim.seed, &cfg.genome);
         div.set_colony_diverse(n, &cfg.genome);
         let stat = |s: &sim::Simulator, f: fn(&genome::Genome) -> f32| {
             let vs: Vec<f32> = s.ants.iter().map(|a| f(&a.genome)).collect();
-            let (mn, mx) = vs.iter().cloned().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
+            let (mn, mx) = vs
+                .iter()
+                .cloned()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+                    (a.min(v), b.max(v))
+                });
             let mean = vs.iter().sum::<f32>() / vs.len().max(1) as f32;
             (mn, mx, mean)
         };
@@ -1477,11 +2037,26 @@ draw();
         let (emn, emx, emean) = stat(&div, ex);
         let (amn, amx, amean) = stat(&div, ag);
         let diverse_ok = (dmx - dmn) > 0.0 && (hmx - hmn) < 1e-6;
-        println!("DIVERSITY {} (n={n})", if diverse_ok { "PASS" } else { "FAIL" });
-        println!("  homo  follow_strength: [{:.3},{:.3}] mean={:.3}", hmn, hmx, hmean);
-        println!("  div   follow_strength: [{:.3},{:.3}] mean={:.3}", dmn, dmx, dmean);
-        println!("  div   explore_rate:    [{:.3},{:.3}] mean={:.3}", emn, emx, emean);
-        println!("  div   aggression:      [{:.3},{:.3}] mean={:.3}", amn, amx, amean);
+        println!(
+            "DIVERSITY {} (n={n})",
+            if diverse_ok { "PASS" } else { "FAIL" }
+        );
+        println!(
+            "  homo  follow_strength: [{:.3},{:.3}] mean={:.3}",
+            hmn, hmx, hmean
+        );
+        println!(
+            "  div   follow_strength: [{:.3},{:.3}] mean={:.3}",
+            dmn, dmx, dmean
+        );
+        println!(
+            "  div   explore_rate:    [{:.3},{:.3}] mean={:.3}",
+            emn, emx, emean
+        );
+        println!(
+            "  div   aggression:      [{:.3},{:.3}] mean={:.3}",
+            amn, amx, amean
+        );
         return Ok(());
     }
 
@@ -1497,10 +2072,17 @@ draw();
         }
         let f2 = fingerprint(&s2);
         let pass = f1 == f2;
-        println!("DETERMINISM {} (ticks={ticks})", if pass { "PASS" } else { "FAIL" });
+        println!(
+            "DETERMINISM {} (ticks={ticks})",
+            if pass { "PASS" } else { "FAIL" }
+        );
         println!("  run1: {f1}");
         println!("  run2: {f2}");
-        return if pass { Ok(()) } else { Err(anyhow::anyhow!("nondeterminism detected")) };
+        return if pass {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("nondeterminism detected"))
+        };
     }
 
     let colony: usize = arg_value(args, "--colony", "400").parse()?;
@@ -1518,9 +2100,7 @@ draw();
         }
     }
 
-    println!(
-        "headless: scenario={scenario} colony={colony} seed={seed} ticks={ticks}"
-    );
+    println!("headless: scenario={scenario} colony={colony} seed={seed} ticks={ticks}");
     println!("food sources:");
     for (i, f) in sim.world.food.iter().enumerate() {
         println!(
@@ -1556,7 +2136,11 @@ draw();
         .sum();
     let env_tag = {
         let e = arg_value(args, "--env", "");
-        if e.is_empty() { arg_value(args, "--scenario", "two") } else { e }
+        if e.is_empty() {
+            arg_value(args, "--scenario", "two")
+        } else {
+            e
+        }
     };
 
     let mut csv: Option<std::fs::File> = if csv_path.is_empty() {
@@ -1586,19 +2170,22 @@ draw();
                 let def = sim
                     .ants
                     .iter()
-                    .filter(|a| matches!(a.state, crate::ant::State::Defend | crate::ant::State::Alarm))
+                    .filter(|a| {
+                        matches!(
+                            a.state,
+                            crate::ant::State::Defend | crate::ant::State::Alarm
+                        )
+                    })
                     .count() as f32;
                 let mut row = format!("{},{}", sim.tick, sim.collected as i64);
                 for v in &sim.source_visits {
                     row.push_str(&format!(",{v}"));
                 }
                 for f in &sim.world.food {
-                    let m = sim.world.field.mean_in_rect(
-                        world::Channel::Trail,
-                        f.pos.x,
-                        f.pos.y,
-                        6.0,
-                    );
+                    let m =
+                        sim.world
+                            .field
+                            .mean_in_rect(world::Channel::Trail, f.pos.x, f.pos.y, 6.0);
                     row.push_str(&format!(",{m:.5}"));
                 }
                 let total = sim.ants.len().max(1) as f32;
@@ -1613,10 +2200,7 @@ draw();
 
         // stdout progress samples
         if t >= last_print {
-            let mut line = format!(
-                "t={:<5} collected={:.0} visits=[",
-                sim.tick, sim.collected
-            );
+            let mut line = format!("t={:<5} collected={:.0} visits=[", sim.tick, sim.collected);
             for v in &sim.source_visits {
                 line += &format!("{v} ");
             }
@@ -1624,12 +2208,10 @@ draw();
             // per-source corridor Trail density (mean in a 6-cell box)
             line += " trail_mean=[";
             for f in &sim.world.food {
-                let m = sim.world.field.mean_in_rect(
-                    world::Channel::Trail,
-                    f.pos.x,
-                    f.pos.y,
-                    6.0,
-                );
+                let m = sim
+                    .world
+                    .field
+                    .mean_in_rect(world::Channel::Trail, f.pos.x, f.pos.y, 6.0);
                 line += &format!("{m:.3} ");
             }
             line += "]";
@@ -1644,10 +2226,15 @@ draw();
     // T13: developmental neurogenesis telemetry — MB volume (active KC count)
     // grows from MB_KC_INIT toward MB_KC as ants accumulate foraging rewards.
     if !sim.ants.is_empty() {
-        let mean_kc = sim.ants.iter().map(|a| a.mb_kc_active as f32).sum::<f32>()
-            / sim.ants.len() as f32;
+        let mean_kc =
+            sim.ants.iter().map(|a| a.mb_kc_active as f32).sum::<f32>() / sim.ants.len() as f32;
         let max_kc = sim.ants.iter().map(|a| a.mb_kc_active).max().unwrap_or(0);
-        println!("mb_kc_active: mean={:.1} max={} init={}", mean_kc, max_kc, crate::genome::MB_KC_INIT);
+        println!(
+            "mb_kc_active: mean={:.1} max={} init={}",
+            mean_kc,
+            max_kc,
+            crate::genome::MB_KC_INIT
+        );
     }
     for (i, v) in sim.source_visits.iter().enumerate() {
         let f = &sim.world.food[i];

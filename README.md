@@ -35,8 +35,8 @@
 - **6 种决策脑**：手写子行为 FSM（默认）、直接编码 ANN、间接编码 CPPN、LIF 脉冲 SNN、蘑菇体 MB、中央复合体 CX，均可经 `--brain` 切换并参与演化。
 - **基因 × 环境闭环**：30+ 字段基因组，高斯变异 + BLX-α 交叉，5 种环境预设，冠军基因随环境特化。
 - **神经模块化昆虫脑**：蘑菇体（AL+MB+多巴胺门控 STDP+神经发生）、中央复合体环吸引子路径积分、多模态整合、章鱼胺/多巴胺神经调质、CPG 三角步态。
-- **涌现行为**：ACO 双桥最短路径、工/兵/育幼分工、领地战争、育幼 stigmergy、协同进化军备竞赛。
-- **科学验证**：行为涌现电池（`--validate`）、机制消融 → 可证伪预测 + 湿实验 protocol（`--ablate`）、文献定量对照（`--compare-lit`）、CX 路径积分误差基准（`--bench-cx`）。
+- **涌现行为**：双桥门线交通、实时行为状态预算（觅食/防御/育幼）、领地战争、育幼 stigmergy、竞争敏感性。
+- **科学检查**：内部行为涌现电池（`--validate`）、配对多 seed 的模型内反事实敏感性（`--ablate`）、带定义差异的文献上下文对照（`--compare-lit`）、CX 数值路径积分基准（`--bench-cx`）。
 - **可复现 + 可扩展**：rayon 并行下逐字节确定性；100k 蚂蚁 @ 136 tick/s。
 
 ## 快速开始
@@ -104,16 +104,16 @@ cargo run --release -- --headless --report   # 重生成 REPORT.md
 
 | 命令 | 验证内容 |
 |---|---|
-| `--validate [--evolved]` | 行为涌现电池：6 脑 × 5 环境，5 判据（survival/trail/caste/growth/foraging） |
-| `--ablate <mech>` | 8 机制消融 → 可证伪预测 + 湿实验 protocol（见 `results/ablations.md`） |
-| `--compare-lit` | 模型 vs 文献定量对照（含 CX/MB 神经模块） |
-| `--bench-cx` | CX 路径积分误差 vs 沙漠蚁 Cataglyphis |
+| `--validate [--evolved]` | 内部行为涌现电池：6 脑 × 5 环境，5 判据（survival/trail/task budget/growth/foraging） |
+| `--ablate <mech> [--n-seeds N]` | 配对随机种子的模型内反事实敏感性；不会推断真实生物机制充分性（见 `results/ablations.md`） |
+| `--compare-lit` | 模型读出与代表性文献锚点的描述性对照（显式显示定义/尺度差异） |
+| `--bench-cx` | 抽象 CX 积分器的数值误差基准；不是沙漠蚁生物学拟合 |
 | `--verify-determinism` | rayon 并行下逐字节确定性 |
 
 ## 关键结果
 
-- **ACO 双桥**：短/长路径 Trail 峰值比 ~7×，短路径占比 ~88%（对齐 Deneubourg/Goss 80–90%）。
-- **分工品级**：forager ~70%、guard+nurse ~30%（对齐 Gordon 的社会昆虫分工区间）。
+- **双桥交通测量**：`--bridge` 以蚂蚁运动线段跨越两臂门线的返巢流量计算短路偏置；不再由信息素峰值推断交通比例。
+- **任务预算测量**：`--caste` 在 warm-up 后报告实时 `State` 的觅食/防御/育幼时间均值与标准差；它不是形态品级比例。
 - **基因 × 环境特化**：rich_close 冠军低探索（剥削近食）、scarce/maze 冠军高探索、predator 冠军高 aggression + 防御特化。
 - **演化适配硬环境**：默认脑在 scarce_far/maze 饿死 → 演化冠军存活并增长（`--validate --evolved`）。
 - **CX 路径积分**：漂移 0.0–0.3%，比真实沙漠蚁（8–12%）更准（无传感噪声，定性缩放一致）。
@@ -125,9 +125,9 @@ cargo run --release -- --headless --report   # 重生成 REPORT.md
 
 ```bash
 # 涌现行为
-cargo run --release -- --headless --bridge  --ticks 6000 --colony 500   # 教科书双桥 ACO
+cargo run --release -- --headless --bridge --ticks 6000 --colony 500   # 双桥实际门线交通（短/长返巢流量）
 cargo run --release -- --headless --scenario two --ticks 6000           # 双源最短路径
-cargo run --release -- --headless --caste --colony 400                  # 工/兵分工比
+cargo run --release -- --headless --caste --env predator --ticks 3000 --colony 400  # 实时任务状态预算
 cargo run --release -- --headless --brood --ticks 1000                  # 育幼 stigmergy
 cargo run --release -- --headless --coevolve --rounds 10                # 两群协同进化（军备竞赛）
 
@@ -141,9 +141,9 @@ cargo run --release -- --headless --transfer --ticks 800                # 跨环
 # 验证 / 文献
 cargo run --release -- --headless --validate --ticks 3000               # 行为涌现电池
 cargo run --release -- --headless --validate --evolved --env scarce_far --ticks 3000  # 演化冠军在硬环境
-cargo run --release -- --headless --ablate octopamine --env scarce_far --ticks 3000    # 消融 → 可证伪预测
-cargo run --release -- --headless --compare-lit                          # 文献定量对照
-cargo run --release -- --headless --bench-cx                             # CX PI 误差 vs Cataglyphis
+cargo run --release -- --headless --ablate octopamine --env scarce_far --ticks 3000 --n-seeds 5 --out results/ablate_oa.csv  # 配对模型内敏感性
+cargo run --release -- --headless --compare-lit                          # 文献锚点的描述性对照
+cargo run --release -- --headless --bench-cx                             # 抽象 CX PI 数值误差
 
 # 工程
 cargo run --release -- --headless --bench --colony 100000               # 100k 性能基准
@@ -189,8 +189,8 @@ docs/                  # research_scope.md 等研究文档
 
 - `REPORT.md` — 结果报告（冠军矩阵 / 迁移 / 文献对照 / Tier 24 全扫）
 - `PROGRESS.md` — 逐层开发日志
-- `docs/research_scope.md` — 可验证 vs 不可验证范围界定
-- `results/ablations.md` — 8 机制消融 + 湿实验 protocol
+- `docs/research_scope.md` — 模型内证据、外部假设、限制与参考文献
+- `results/ablations.md` — 8 个开关的模型内反事实敏感性协议与解释边界
 - `CLAUDE.md` — 项目内部约定
 
 ## 许可证

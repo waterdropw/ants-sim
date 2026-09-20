@@ -2,8 +2,8 @@
 # Gordon (2010) "Ant Encounters".
 metric = "active_forager_fraction"
 source = "Gordon 1989/1996; Gordon 2010 synthesis"
-caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a copy of a copyrighted dataset. 'Forager' definition differs (Gordon: ants leaving the nest on a foraging trip); model 'forager' = non-guard caste (task_jitter>=0). Species, colony age, season differ. Quantitative-magnitude fit, not a statistical fit."
-description = "Fraction of the active workforce foraging. Gordon reports ~20-40% actively foraging in mature Pogonomyrmex colonies."
+caveat = "Representative published values encoded as explicit datapoints from widely-cited summaries, NOT a copy of a copyrighted dataset. 'Forager' definition differs (Gordon: ants leaving the nest on a foraging trip); the model comparator is the time-average of live action labels Explore, FollowTrail and CarryReturn after a warm-up, not task_jitter or a morphological caste. Species, colony age, season and task opportunities differ. Interval overlap is descriptive only, not a statistical or species-level fit."
+description = "Fraction of the active workforce foraging. Gordon reports ~20-40% actively foraging in mature Pogonomyrmex colonies; the model comparison uses a non-isomorphic, live-state time budget."
 
 # typical active-forager fraction in mature harvester-ant colonies
 [[datapoints]]

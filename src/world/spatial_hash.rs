@@ -20,8 +20,8 @@ pub struct SpatialHash {
 
 impl SpatialHash {
     pub fn new(width: usize, height: usize) -> Self {
-        let bw = (width + CELL - 1) / CELL;
-        let bh = (height + CELL - 1) / CELL;
+        let bw = width.div_ceil(CELL);
+        let bh = height.div_ceil(CELL);
         Self {
             cell: CELL,
             bw,

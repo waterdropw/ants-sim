@@ -25,8 +25,16 @@ pub struct Environment {
 impl Environment {
     pub fn build(name: &str, nest: Vec2, w: f32, h: f32) -> Environment {
         let big = 1_000_000.0;
-        let mk = |x: f32, y: f32| FoodSource { pos: Vec2::new(x, y), radius: 4.0, amount: big };
-        let e_at = |x: f32, y: f32| Enemy { pos: Vec2::new(x, y), radius: 2.0, health: 10.0 };
+        let mk = |x: f32, y: f32| FoodSource {
+            pos: Vec2::new(x, y),
+            radius: 4.0,
+            amount: big,
+        };
+        let e_at = |x: f32, y: f32| Enemy {
+            pos: Vec2::new(x, y),
+            radius: 2.0,
+            health: 10.0,
+        };
 
         let (foods, enemies, walls): (Vec<FoodSource>, Vec<Enemy>, Vec<Wall>) = match name {
             // Abundance + proximity: low foraging pressure.
@@ -41,11 +49,7 @@ impl Environment {
                 vec![],
             ),
             // Scarcity + distance: high foraging pressure, favours strong trails.
-            "scarce_far" => (
-                vec![mk(w - 30.0, nest.y)],
-                vec![],
-                vec![],
-            ),
+            "scarce_far" => (vec![mk(w - 30.0, nest.y)], vec![], vec![]),
             // Predator pressure on foraging routes (not at the nest mouth):
             // 2 enemies ~28 cells out so alarm is localised — foraging can
             // continue while guards engage. Favours defence + enough foraging.
@@ -73,9 +77,24 @@ impl Environment {
                 vec![mk(w - 30.0, nest.y)],
                 vec![],
                 vec![
-                    Wall { x0: w * 0.45, y0: h * 0.20, x1: w * 0.47, y1: h * 0.50 },
-                    Wall { x0: w * 0.55, y0: h * 0.50, x1: w * 0.57, y1: h * 0.80 },
-                    Wall { x0: w * 0.40, y0: h * 0.62, x1: w * 0.60, y1: h * 0.64 },
+                    Wall {
+                        x0: w * 0.45,
+                        y0: h * 0.20,
+                        x1: w * 0.47,
+                        y1: h * 0.50,
+                    },
+                    Wall {
+                        x0: w * 0.55,
+                        y0: h * 0.50,
+                        x1: w * 0.57,
+                        y1: h * 0.80,
+                    },
+                    Wall {
+                        x0: w * 0.40,
+                        y0: h * 0.62,
+                        x1: w * 0.60,
+                        y1: h * 0.64,
+                    },
                 ],
             ),
             _ => (vec![mk(nest.x + 50.0, nest.y)], vec![], vec![]),
@@ -118,7 +137,10 @@ impl Environment {
 
     pub fn presets() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("rich_close", "abundant food close to nest — low foraging pressure"),
+            (
+                "rich_close",
+                "abundant food close to nest — low foraging pressure",
+            ),
             ("scarce_far", "single distant food — high foraging pressure"),
             ("predator", "enemies near nest — defense pressure"),
             ("patchy", "clustered food patches — exploitation pressure"),

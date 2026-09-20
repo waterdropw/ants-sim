@@ -86,8 +86,7 @@ impl App {
             match &mut self.tex_all[i] {
                 Some(t) => t.set(im, opts),
                 None => {
-                    self.tex_all[i] =
-                        Some(ctx.load_texture(format!("field{i}"), im, opts));
+                    self.tex_all[i] = Some(ctx.load_texture(format!("field{i}"), im, opts));
                 }
             }
         }
@@ -170,7 +169,10 @@ impl eframe::App for App {
                 ui.add_space(8.0);
                 ui.heading("Controls");
                 ui.horizontal(|ui| {
-                    if ui.button(if self.sim.paused { "Play" } else { "Pause" }).clicked() {
+                    if ui
+                        .button(if self.sim.paused { "Play" } else { "Pause" })
+                        .clicked()
+                    {
                         self.sim.paused = !self.sim.paused;
                     }
                     if ui.button("Step").clicked() {
@@ -184,16 +186,27 @@ impl eframe::App for App {
                 ui.add_space(8.0);
                 ui.label("Pheromone channel");
                 ui.horizontal(|ui| {
-                    if ui.radio_value(&mut self.channel, Channel::Trail, "Trail").changed() {
+                    if ui
+                        .radio_value(&mut self.channel, Channel::Trail, "Trail")
+                        .changed()
+                    {
                         self.tex = None;
                     }
-                    if ui.radio_value(&mut self.channel, Channel::Home, "Home").changed() {
+                    if ui
+                        .radio_value(&mut self.channel, Channel::Home, "Home")
+                        .changed()
+                    {
                         self.tex = None;
                     }
-                    if ui.radio_value(&mut self.channel, Channel::Alarm, "Alarm").changed() {
+                    if ui
+                        .radio_value(&mut self.channel, Channel::Alarm, "Alarm")
+                        .changed()
+                    {
                         self.tex = None;
                     }
-                    if ui.radio_value(&mut self.channel, Channel::Recruitment, "Recruit").changed()
+                    if ui
+                        .radio_value(&mut self.channel, Channel::Recruitment, "Recruit")
+                        .changed()
                     {
                         self.tex = None;
                     }
@@ -268,10 +281,18 @@ impl eframe::App for App {
                         pts.push(egui::pos2(x, y));
                     }
                     if pts.len() >= 2 {
-                        p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 220, 160))));
+                        p.add(egui::Shape::line(
+                            pts,
+                            egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 220, 160)),
+                        ));
                     }
                 }
-                ui.label(format!("collected={:.0} ants={} brood={:.0}", self.sim.collected, self.sim.ants.len(), self.sim.world.brood));
+                ui.label(format!(
+                    "collected={:.0} ants={} brood={:.0}",
+                    self.sim.collected,
+                    self.sim.ants.len(),
+                    self.sim.world.brood
+                ));
                 // T18.4: MB activity panel (KC sparsity sparkline + dopamine bars)
                 if self.sim.brain_mb {
                     ui.label("MB activity (KC sparsity + dopamine)");
@@ -304,8 +325,10 @@ impl eframe::App for App {
                         (0.0, 0.0)
                     } else {
                         let n = self.sim.ants.len() as f32;
-                        let r: f32 = self.sim.ants.iter().map(|a| a.dopamine_reward).sum::<f32>() / n;
-                        let p: f32 = self.sim.ants.iter().map(|a| a.dopamine_punish).sum::<f32>() / n;
+                        let r: f32 =
+                            self.sim.ants.iter().map(|a| a.dopamine_reward).sum::<f32>() / n;
+                        let p: f32 =
+                            self.sim.ants.iter().map(|a| a.dopamine_punish).sum::<f32>() / n;
                         (r, p)
                     };
                     for (label, val, col) in [
@@ -407,12 +430,18 @@ impl eframe::App for App {
                     ui.horizontal(|ui| {
                         for col in 0..2 {
                             let i = row * 2 + col;
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(thumb, thumb), egui::Sense::hover());
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(thumb, thumb),
+                                egui::Sense::hover(),
+                            );
                             if let Some(t) = &self.tex_all[i] {
                                 ui.painter_at(rect).image(
                                     t.id(),
                                     rect,
-                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, 1.0),
+                                    ),
                                     egui::Color32::WHITE,
                                 );
                             }
@@ -488,7 +517,11 @@ impl eframe::App for App {
                 ui.label(
                     egui::RichText::new(format!(
                         "genome: fs={:.2} explore={:.2} follow={:.2} aggr={:.2} task_bias={:+.2}",
-                        g.follow_strength, g.explore_rate, g.follow_strength, g.aggression, g.task_bias
+                        g.follow_strength,
+                        g.explore_rate,
+                        g.follow_strength,
+                        g.aggression,
+                        g.task_bias
                     ))
                     .small(),
                 );
@@ -606,19 +639,31 @@ impl eframe::App for App {
                         }
                         "erase" => {
                             // remove nearest food/enemy/wall to click
-                            
-                            if let Some(i) = self.sim.world.food.iter().enumerate()
+
+                            if let Some(i) = self
+                                .sim
+                                .world
+                                .food
+                                .iter()
+                                .enumerate()
                                 .min_by(|a, b| {
                                     let da = (a.1.pos.x - gx).hypot(a.1.pos.y - gy);
                                     let db = (b.1.pos.x - gx).hypot(b.1.pos.y - gy);
                                     da.partial_cmp(&db).unwrap()
-                                }).map(|(i, _)| i)
+                                })
+                                .map(|(i, _)| i)
                             {
-                                if (self.sim.world.food[i].pos.x - gx).hypot(self.sim.world.food[i].pos.y - gy) < 10.0 {
+                                if (self.sim.world.food[i].pos.x - gx)
+                                    .hypot(self.sim.world.food[i].pos.y - gy)
+                                    < 10.0
+                                {
                                     self.sim.world.food.remove(i);
                                 }
                             }
-                            self.sim.world.enemies.retain(|e| (e.pos.x - gx).hypot(e.pos.y - gy) > 10.0);
+                            self.sim
+                                .world
+                                .enemies
+                                .retain(|e| (e.pos.x - gx).hypot(e.pos.y - gy) > 10.0);
                             self.sim.world.walls.retain(|w| {
                                 let cx = (w.x0 + w.x1) * 0.5;
                                 let cy = (w.y0 + w.y1) * 0.5;
@@ -631,7 +676,9 @@ impl eframe::App for App {
                                 for dx in -2..=2 {
                                     let d = ((dx * dx + dy * dy) as f32).sqrt();
                                     let amt = 2.0 * (1.0 - d / 3.0).max(0.0);
-                                    self.sim.world.deposit(Channel::Trail, ix + dx, iy + dy, amt);
+                                    self.sim
+                                        .world
+                                        .deposit(Channel::Trail, ix + dx, iy + dy, amt);
                                 }
                             }
                         }

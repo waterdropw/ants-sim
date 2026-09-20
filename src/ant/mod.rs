@@ -10,7 +10,6 @@ use crate::world::World;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Explore,
@@ -37,7 +36,7 @@ pub struct Ant {
     /// LIF membrane potentials (T3-gap9): hidden [10] + output [5], giving
     /// the network temporal memory (leaky integration) vs tanh's stateless
     /// forward pass.
-    pub lif_v: [f32; 10],  // hidden membrane potentials
+    pub lif_v: [f32; 10], // hidden membrane potentials
     pub lif_v_out: [f32; 5], // output membrane potentials
     /// learnable weight copy (T7.2 STDP): initialized from genome.ann_weights
     /// at birth, modified by spike-timing-dependent plasticity during life.
@@ -47,12 +46,12 @@ pub struct Ant {
     pub last_spike_h: [u32; 10],
     pub last_spike_o: [u32; 5],
     // T8 modular brain (AL→MB→Output) state
-    pub mb_kc_v: Vec<f32>,           // KC membrane potentials (MB_KC=64)
-    pub mb_out_v: [f32; 5],          // output membrane potentials
-    pub mb_al_osc: f32,             // AL oscillation phase
-    pub mb_kc_active: usize,        // T13 active KC count (grows with experience)
-    pub learned_mb_w: Vec<f32>,      // STDP-modifiable MB weight copy
-    pub last_kc_spike: Vec<u32>,    // last spike tick per KC (for STDP)
+    pub mb_kc_v: Vec<f32>,       // KC membrane potentials (MB_KC=64)
+    pub mb_out_v: [f32; 5],      // output membrane potentials
+    pub mb_al_osc: f32,          // AL oscillation phase
+    pub mb_kc_active: usize,     // T13 active KC count (grows with experience)
+    pub learned_mb_w: Vec<f32>,  // STDP-modifiable MB weight copy
+    pub last_kc_spike: Vec<u32>, // last spike tick per KC (for STDP)
     // T15: MB-private output-spike ticks (was reusing last_spike_o, shared with
     // the ANN STDP path — benign while one brain runs per ant, but the field
     // was not MB-specific; give MB its own to remove the cross-brain coupling).
@@ -61,7 +60,7 @@ pub struct Ant {
     // punish (damage→LTD). Both decay fast; gate MB + ANN STDP by sign.
     pub dopamine_reward: f32,
     pub dopamine_punish: f32,
-    pub octopamine: f32,            // foraging motivation (arousal)
+    pub octopamine: f32, // foraging motivation (arousal)
     /// T22 ablation flags (per-ant, set by Simulator each tick for mechanisms
     /// reachable only from Ant::update / sensors). vision: skip visual sensing;
     /// stdp: skip lifetime synaptic plasticity.
@@ -73,9 +72,9 @@ pub struct Ant {
     // home_hx/home_hy vector is still maintained as ground-truth reference.
     pub use_cx: bool,
     pub cx_bump: [f32; crate::genome::CX_N], // ring-attractor activity (one bump)
-    pub cx_hv_x: f32,           // home-vector accumulator (CPU4 analog), x
-    pub cx_hv_y: f32,           // home-vector accumulator, y
-    pub cx_prev_heading: f32,   // last tick's heading (for angular-velocity shift)
+    pub cx_hv_x: f32,                        // home-vector accumulator (CPU4 analog), x
+    pub cx_hv_y: f32,                        // home-vector accumulator, y
+    pub cx_prev_heading: f32,                // last tick's heading (for angular-velocity shift)
     pub age: u32,
     /// task-threshold heterogeneity seed (M4: foraging vs guarding lean)
     pub task_jitter: f32,
@@ -140,7 +139,14 @@ impl Ant {
             octopamine: 0.0,
             ablate_vision: false,
             ablate_stdp: false,
-            leg_phase: [0.0, std::f32::consts::PI, 0.0, std::f32::consts::PI, 0.0, std::f32::consts::PI],
+            leg_phase: [
+                0.0,
+                std::f32::consts::PI,
+                0.0,
+                std::f32::consts::PI,
+                0.0,
+                std::f32::consts::PI,
+            ],
             use_cx: false,
             cx_bump: [1.0 / crate::genome::CX_N as f32; crate::genome::CX_N],
             cx_hv_x: 0.0,
@@ -180,8 +186,7 @@ impl Ant {
     /// experience across the ant's lifetime (structural plasticity).
     pub fn grow_mb(&mut self, kcs: f32) {
         let max = crate::genome::MB_KC as f32;
-        let grown = (self.mb_kc_active as f32 + kcs)
-            .clamp(crate::genome::MB_KC_INIT as f32, max);
+        let grown = (self.mb_kc_active as f32 + kcs).clamp(crate::genome::MB_KC_INIT as f32, max);
         self.mb_kc_active = grown as usize;
     }
 
@@ -202,7 +207,14 @@ impl Ant {
 
     /// One tick: sense → decide (sets heading, transitions, deposits) → move.
     /// `brain_ann` selects the ANN decision layer (T2.2) over the FSM.
-    pub fn update(&mut self, world: &World, brain_ann: bool, brain_snn: bool, brain_mb: bool, brain_cx: bool) {
+    pub fn update(
+        &mut self,
+        world: &World,
+        brain_ann: bool,
+        brain_snn: bool,
+        brain_mb: bool,
+        brain_cx: bool,
+    ) {
         if self.dead {
             return;
         }
@@ -224,8 +236,8 @@ impl Ant {
         self.octopamine *= 0.99;
         let foraging = matches!(self.state, State::Explore | State::FollowTrail) && !self.carrying;
         if foraging {
-            self.octopamine = (self.octopamine + crate::genome::OCT_FORAGE_GAIN)
-                .min(crate::genome::OCT_MAX);
+            self.octopamine =
+                (self.octopamine + crate::genome::OCT_FORAGE_GAIN).min(crate::genome::OCT_MAX);
         } else if self.carrying || self.state == State::Nurse {
             self.octopamine = (self.octopamine - crate::genome::OCT_REST_DECAY).max(0.0);
         }
@@ -281,8 +293,8 @@ impl Ant {
         // T14: CPG gait — octopamine arousal raises gait frequency, which raises
         // walking speed (neuromodulator → locomotion, ties into T11). The leg
         // phases advance at `omega` (observable gait), speed scales with it.
-        let omega = self.genome.cpg_freq
-            * (1.0 + crate::genome::CPG_AROUSAL_GAIN * self.octopamine);
+        let omega =
+            self.genome.cpg_freq * (1.0 + crate::genome::CPG_AROUSAL_GAIN * self.octopamine);
         let speed = self.genome.max_speed * (omega / self.genome.cpg_freq);
         self.step_cpg(omega);
         let old_x = self.pos.x;

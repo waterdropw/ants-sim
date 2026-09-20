@@ -14,13 +14,13 @@ use crate::world::{Channel, World};
 use rand::Rng;
 
 // Brood stigmergy (T4.1): nurses add biomass, neglect starves it.
-const BROOD_TEND: f32 = 0.04;  // per nurse per tick
+const BROOD_TEND: f32 = 0.04; // per nurse per tick
 const BROOD_HEALTHY: f32 = 30.0; // nurses leave once brood is well-tended
 
 // Age polyethism (T7.4): caste depends on age, not just birth jitter.
 // Young → Nurse, middle → Forager, old → Guard. Individual variation via
 // task_jitter (some mature earlier/later) prevents synchronized transition.
-const NURSE_AGE_BASE: f32 = 200.0;  // ticks
+const NURSE_AGE_BASE: f32 = 200.0; // ticks
 const GUARD_AGE_BASE: f32 = 600.0;
 
 /// Steer `heading` toward `target` by at most `max_turn` radians.
@@ -116,7 +116,12 @@ pub fn decide(ant: &mut Ant, s: &Sensing, world: &World) {
                     ant.carrying = true;
                     ant.carrying_from = Some(idx);
                     ant.pending_pickup = Some(idx);
-                    ant.pending_deposits.push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
+                    ant.pending_deposits.push((
+                        Channel::Recruitment,
+                        ix,
+                        iy,
+                        g.trail_release_rate * 0.5,
+                    ));
                     ant.trip_dist = 0.0;
                     ant.state = State::CarryReturn;
                 }
@@ -141,7 +146,12 @@ pub fn decide(ant: &mut Ant, s: &Sensing, world: &World) {
                     ant.carrying = true;
                     ant.carrying_from = Some(idx);
                     ant.pending_pickup = Some(idx);
-                    ant.pending_deposits.push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
+                    ant.pending_deposits.push((
+                        Channel::Recruitment,
+                        ix,
+                        iy,
+                        g.trail_release_rate * 0.5,
+                    ));
                     ant.trip_dist = 0.0;
                     ant.state = State::CarryReturn;
                 }
@@ -313,7 +323,7 @@ pub fn cx_home_error(ant: &Ant) -> (f32, f32) {
 /// attack). Weights live in `genome.ann_weights`. The network learns, via
 /// evolution, to follow trails / return home / defend — replacing the hand-
 /// written FSM when `--brain ann` is set.
-pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+pub fn ann_decide(ant: &mut Ant, s: &Sensing, _world: &World) {
     let g = &ant.genome;
     let w = &g.ann_weights;
     let n = ann_weight_count();
@@ -353,12 +363,12 @@ pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
         (1.0 - c) * tv * ts, // outbound steer toward trail (gated by presence)
         c * ns,              // return steer toward nest
         (1.0 - c) * s.trail_val,
-        c,                   // carrying gate
+        c, // carrying gate
         ant.energy,
         s.alarm_val,
-        av * as_,            // alarm steer (gated by presence)
-        nc,                  // nest-ahead (cos)
-        noise,               // exploration (bootstrap when no trail)
+        av * as_, // alarm steer (gated by presence)
+        nc,       // nest-ahead (cos)
+        noise,    // exploration (bootstrap when no trail)
     ];
 
     // forward pass: hidden = tanh(W1·x + b1)
@@ -391,13 +401,15 @@ pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     let dep_home = out[2].max(0.0) * g.home_release_rate * 0.1;
     let dep_alarm = out[3].max(0.0) * g.alarm_release_rate;
     if dep_trail > 0.0 {
-        ant.pending_deposits.push((Channel::Trail, ix, iy, dep_trail));
+        ant.pending_deposits
+            .push((Channel::Trail, ix, iy, dep_trail));
     }
     if dep_home > 0.0 {
         ant.pending_deposits.push((Channel::Home, ix, iy, dep_home));
     }
     if dep_alarm > 0.0 {
-        ant.pending_deposits.push((Channel::Alarm, ix, iy, dep_alarm));
+        ant.pending_deposits
+            .push((Channel::Alarm, ix, iy, dep_alarm));
     }
     if out[4] > 0.0 {
         if let Some(idx) = s.enemy_idx {
@@ -413,7 +425,8 @@ pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
             ant.carrying = true;
             ant.carrying_from = Some(idx);
             ant.pending_pickup = Some(idx);
-            ant.pending_deposits.push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
+            ant.pending_deposits
+                .push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
             ant.trip_dist = 0.0;
         }
     }
@@ -441,7 +454,7 @@ pub fn ann_decide(ant: &mut Ant, s: &Sensing, world: &World) {
 /// responses, and exhibit dynamics that stateless tanh cannot produce.
 /// Sub-threshold readout (tanh of potential) keeps outputs continuous for
 /// steering/deposits while the integration adds the temporal dimension.
-pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
+pub fn snn_decide(ant: &mut Ant, s: &Sensing, _world: &World) {
     let g = &ant.genome;
     // T7.2: use the learnable weight copy (STDP-modified) instead of the
     // innate genome weights. This separates "what evolution selects" (genome)
@@ -472,8 +485,12 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // visual foraging that lets the colony reach break-even before starving.
     let steer = |b: f32| {
         let mut d = b - ant.heading;
-        while d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
-        while d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+        while d > std::f32::consts::PI {
+            d -= std::f32::consts::TAU;
+        }
+        while d < -std::f32::consts::PI {
+            d += std::f32::consts::TAU;
+        }
         d / std::f32::consts::PI
     };
     let ts = steer(s.trail_bearing);
@@ -485,7 +502,11 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     let noise = ant.rng.gen_range(-1.0f32..1.0);
     let tv = s.trail_val * 20.0;
     let av = s.alarm_val * 10.0;
-    let vs = if s.vision_food_idx.is_some() { steer(s.vision_food_bearing) } else { 0.0 };
+    let vs = if s.vision_food_idx.is_some() {
+        steer(s.vision_food_bearing)
+    } else {
+        0.0
+    };
     let inputs = [
         (1.0 - c) * (tv * ts + vs),
         c * ns,
@@ -519,7 +540,9 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
         }
         ant.lif_v[h] += (inp - LIF_LEAK * ant.lif_v[h]) * dt;
         hidden[h] = ant.lif_v[h].tanh(); // sub-threshold readout
-        if ant.lif_v[h] >= 1.0 { h_spike[h] = true; }
+        if ant.lif_v[h] >= 1.0 {
+            h_spike[h] = true;
+        }
     }
     // output: v_o[o] += (sum_h W2[o,h]*hidden[h] + b2[o] - LIF_LEAK*v_o[o]) * dt
     let mut out = [0.0f32; ANN_OUT];
@@ -531,53 +554,59 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
         }
         ant.lif_v_out[o] += (inp - LIF_LEAK * ant.lif_v_out[o]) * dt;
         out[o] = ant.lif_v_out[o].tanh();
-        if ant.lif_v_out[o] >= 1.0 { o_spike[o] = true; }
+        if ant.lif_v_out[o] >= 1.0 {
+            o_spike[o] = true;
+        }
     }
 
     // T22 ablation: skip SNN lifetime plasticity when ablate_stdp is set.
     if !ant.ablate_stdp {
-    // STDP (T7.2, T16): spike-timing-dependent plasticity on W2 (hidden→output),
-    // now dual-dopamine-modulated (parallel to MB). Pre-before-post → LTP,
-    // reward-gated (PAM analog); post-before-pre → LTD, baseline forgetting +
-    // punish-amplified (PPL1 analog). The innate foraging_ann_seed is unaffected
-    // (it lives in the genome copy; only the learned copy is refined here).
-    const STDP_WINDOW: u32 = 10;
-    const STDP_LR: f32 = 0.005;
-    let ltd_rate = STDP_LR
-        + if ant.dopamine_punish > crate::genome::DOPAMINE_THRESH { STDP_LR } else { 0.0 };
-    let ltp_gated = ant.dopamine_reward > crate::genome::DOPAMINE_THRESH;
-    // On hidden spike: LTD for outputs that spiked before this hidden
-    for h in 0..ANN_HID {
-        if h_spike[h] {
-            ant.last_spike_h[h] = ant.age;
-            for o in 0..ANN_OUT {
-                let ts_o = ant.last_spike_o[o];
-                if ts_o > 0 && ant.age > ts_o && ant.age - ts_o < STDP_WINDOW {
-                    // post (output) fired before pre (hidden) → LTD
-                    let idx = w2_off + o * ANN_HID + h;
-                    let v = &mut ant.learned_w[idx];
-                    *v = (*v - ltd_rate).max(crate::genome::ANN_W_MIN);
-                }
-            }
-        }
-    }
-    // On output spike: LTP for hiddens that spiked before this output (reward-gated)
-    for o in 0..ANN_OUT {
-        if o_spike[o] {
-            ant.last_spike_o[o] = ant.age;
-            if ltp_gated {
-                for h in 0..ANN_HID {
-                    let ts_h = ant.last_spike_h[h];
-                    if ts_h > 0 && ant.age > ts_h && ant.age - ts_h < STDP_WINDOW {
-                        // pre (hidden) fired before post (output) → LTP
+        // STDP (T7.2, T16): spike-timing-dependent plasticity on W2 (hidden→output),
+        // now dual-dopamine-modulated (parallel to MB). Pre-before-post → LTP,
+        // reward-gated (PAM analog); post-before-pre → LTD, baseline forgetting +
+        // punish-amplified (PPL1 analog). The innate foraging_ann_seed is unaffected
+        // (it lives in the genome copy; only the learned copy is refined here).
+        const STDP_WINDOW: u32 = 10;
+        const STDP_LR: f32 = 0.005;
+        let ltd_rate = STDP_LR
+            + if ant.dopamine_punish > crate::genome::DOPAMINE_THRESH {
+                STDP_LR
+            } else {
+                0.0
+            };
+        let ltp_gated = ant.dopamine_reward > crate::genome::DOPAMINE_THRESH;
+        // On hidden spike: LTD for outputs that spiked before this hidden
+        for h in 0..ANN_HID {
+            if h_spike[h] {
+                ant.last_spike_h[h] = ant.age;
+                for o in 0..ANN_OUT {
+                    let ts_o = ant.last_spike_o[o];
+                    if ts_o > 0 && ant.age > ts_o && ant.age - ts_o < STDP_WINDOW {
+                        // post (output) fired before pre (hidden) → LTD
                         let idx = w2_off + o * ANN_HID + h;
                         let v = &mut ant.learned_w[idx];
-                        *v = (*v + STDP_LR).min(crate::genome::ANN_W_MAX);
+                        *v = (*v - ltd_rate).max(crate::genome::ANN_W_MIN);
                     }
                 }
             }
         }
-    }
+        // On output spike: LTP for hiddens that spiked before this output (reward-gated)
+        for o in 0..ANN_OUT {
+            if o_spike[o] {
+                ant.last_spike_o[o] = ant.age;
+                if ltp_gated {
+                    for h in 0..ANN_HID {
+                        let ts_h = ant.last_spike_h[h];
+                        if ts_h > 0 && ant.age > ts_h && ant.age - ts_h < STDP_WINDOW {
+                            // pre (hidden) fired before post (output) → LTP
+                            let idx = w2_off + o * ANN_HID + h;
+                            let v = &mut ant.learned_w[idx];
+                            *v = (*v + STDP_LR).min(crate::genome::ANN_W_MAX);
+                        }
+                    }
+                }
+            }
+        }
     } // T22 ablate_stdp guard
 
     // apply outputs (same mapping as ann_decide)
@@ -586,28 +615,46 @@ pub fn snn_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     let dep_trail = out[1].max(0.0) * g.trail_release_rate;
     let dep_home = out[2].max(0.0) * g.home_release_rate * 0.1;
     let dep_alarm = out[3].max(0.0) * g.alarm_release_rate;
-    if dep_trail > 0.0 { ant.pending_deposits.push((Channel::Trail, ix, iy, dep_trail)); }
-    if dep_home > 0.0 { ant.pending_deposits.push((Channel::Home, ix, iy, dep_home)); }
-    if dep_alarm > 0.0 { ant.pending_deposits.push((Channel::Alarm, ix, iy, dep_alarm)); }
+    if dep_trail > 0.0 {
+        ant.pending_deposits
+            .push((Channel::Trail, ix, iy, dep_trail));
+    }
+    if dep_home > 0.0 {
+        ant.pending_deposits.push((Channel::Home, ix, iy, dep_home));
+    }
+    if dep_alarm > 0.0 {
+        ant.pending_deposits
+            .push((Channel::Alarm, ix, iy, dep_alarm));
+    }
     if out[4] > 0.0 {
         if let Some(idx) = s.enemy_idx {
-            if s.enemy_dist <= g.antenna_dist + 1.0 { ant.pending_attacks.push((idx, 1.0)); }
+            if s.enemy_dist <= g.antenna_dist + 1.0 {
+                ant.pending_attacks.push((idx, 1.0));
+            }
         }
     }
     // reflexive pickup/delivery (same as ann_decide)
     if let Some(idx) = s.food_idx {
         if !ant.carrying {
-            ant.carrying = true; ant.carrying_from = Some(idx); ant.trip_dist = 0.0;
+            ant.carrying = true;
+            ant.carrying_from = Some(idx);
+            ant.trip_dist = 0.0;
         }
     }
     if s.at_nest && ant.carrying {
-        ant.carrying = false; ant.delivered_source = ant.carrying_from;
-        ant.carrying_from = None; ant.trip_dist = 0.0;
+        ant.carrying = false;
+        ant.delivered_source = ant.carrying_from;
+        ant.carrying_from = None;
+        ant.trip_dist = 0.0;
         ant.delivered = ant.delivered.saturating_add(1);
     }
-    if ant.carrying { ant.state = State::CarryReturn; }
-    else if s.trail_val > g.trail_threshold { ant.state = State::FollowTrail; }
-    else { ant.state = State::Explore; }
+    if ant.carrying {
+        ant.state = State::CarryReturn;
+    } else if s.trail_val > g.trail_threshold {
+        ant.state = State::FollowTrail;
+    } else {
+        ant.state = State::Explore;
+    }
 }
 
 /// T8 modular brain: AL → MB → Output with dopamine-gated STDP.
@@ -618,7 +665,9 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     let g = &ant.genome;
     let w = &ant.learned_mb_w;
     let n = crate::genome::mb_weight_count();
-    if w.len() != n { return; }
+    if w.len() != n {
+        return;
+    }
 
     // T15: age polyethism — young ants at the nest nurse brood (mirrors FSM).
     // Without nursing the MB colony can't grow via eclosion, leaving it stranded
@@ -637,8 +686,12 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // --- input assembly (20 elements) ---
     let steer = |b: f32| {
         let mut d = b - ant.heading;
-        while d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
-        while d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+        while d > std::f32::consts::PI {
+            d -= std::f32::consts::TAU;
+        }
+        while d < -std::f32::consts::PI {
+            d += std::f32::consts::TAU;
+        }
         d / std::f32::consts::PI
     };
     let ts = steer(s.trail_bearing);
@@ -654,12 +707,16 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // outbound ants from chasing noise when no trail exists yet; vision (when
     // food is in the forward cone) beelines directly, matching the FSM's visual
     // foraging — this is what lets the colony reach break-even before starving.
-    let tv = (s.trail_val * 20.0).tanh();  // trail-presence gate (was unused in mb)
-    let vs = if s.vision_food_idx.is_some() { steer(s.vision_food_bearing) } else { 0.0 };
+    let tv = (s.trail_val * 20.0).tanh(); // trail-presence gate (was unused in mb)
+    let vs = if s.vision_food_idx.is_some() {
+        steer(s.vision_food_bearing)
+    } else {
+        0.0
+    };
     let out_steer = (1.0 - c) * (ts * tv + vs); // input3:  outbound trail+vision steer
-    let in_steer = c * ns;                       // input15: inbound nest steer
-    // T10 multi-modal: vision (food seen at a bearing) + proximity, gated to zero
-    // when nothing is in the visual cone so cos doesn't falsely read "ahead".
+    let in_steer = c * ns; // input15: inbound nest steer
+                           // T10 multi-modal: vision (food seen at a bearing) + proximity, gated to zero
+                           // when nothing is in the visual cone so cos doesn't falsely read "ahead".
     let (v_sin, v_cos, v_prox) = if s.vision_food_idx.is_some() {
         let rel = s.vision_food_bearing - ant.heading;
         (rel.sin(), rel.cos(), 1.0 / (1.0 + s.vision_food_dist))
@@ -670,14 +727,26 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // 20 inputs: 4 channel vals, 4 steer sins, 4 steer coss, 4 state, +4 modality.
     // Slots 3 and 15 carry the carrying-gated steer signals (T15 foraging prior).
     let inputs: [f32; crate::genome::MB_AL_INPUTS] = [
-        s.trail_val, s.home_val, s.alarm_val, out_steer, // 4 channel vals
-        ts, ns, as_, noise,                              // 4 steer signals
+        s.trail_val,
+        s.home_val,
+        s.alarm_val,
+        out_steer, // 4 channel vals
+        ts,
+        ns,
+        as_,
+        noise, // 4 steer signals
         (s.trail_bearing - ant.heading).cos(),
         ((-ant.home_hy).atan2(-ant.home_hx) - ant.heading).cos(),
         (s.alarm_bearing - ant.heading).cos(),
-        nc,                                              // 4 cos signals
-        c, ant.energy, s.alarm_val, in_steer,            // 4 state vars
-        v_sin, v_cos, v_prox, nest_prox,                 // 4 multi-modal (T10 vision+prox)
+        nc, // 4 cos signals
+        c,
+        ant.energy,
+        s.alarm_val,
+        in_steer, // 4 state vars
+        v_sin,
+        v_cos,
+        v_prox,
+        nest_prox, // 4 multi-modal (T10 vision+prox)
     ];
 
     // --- weight layout offsets ---
@@ -756,80 +825,80 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // T22 ablation: skip all lifetime synaptic plasticity (W_out STDP + W_kc
     // Hebbian) when ablate_stdp is set — readout is weight-drift (learning).
     if !ant.ablate_stdp {
-    // --- STDP on W_out (KC→output), compartmentalized dual-dopamine (T16/T18) ---
-    // T18 per-output valence: approach outputs (turn/trail/home, o<MB_APPROACH_OUT)
-    // use reward→LTP, punish→LTD (PAM compartment); avoidance outputs (alarm/attack)
-    // are OPPONENT — punish→LTP, reward→LTD (PPL1 compartment). This lets the MB
-    // learn approach AND avoidance in parallel: foraging reward strengthens food-
-    // seeking while war punish strengthens defense. Baseline forgetting LTD on all.
-    let thr = crate::genome::DOPAMINE_THRESH;
-    let valence = |o: usize| -> (f32, f32) {
-        if o < crate::genome::MB_APPROACH_OUT {
-            (ant.dopamine_reward, ant.dopamine_punish)
-        } else {
-            (ant.dopamine_punish, ant.dopamine_reward) // opponent
-        }
-    };
-    // LTD: baseline forgetting + ltd_dop-amplified
-    for k in 0..kc_act {
-        if kc_spikes[k] {
-            for o in 0..out_n {
-                let ts_o = ant.last_mb_out_spike[o]; // T15: MB-private
-                if ts_o > 0 && ant.age > ts_o && ant.age - ts_o < 10 {
-                    let (_, ltd_dop) = valence(o);
-                    let rate = 0.005 + if ltd_dop > thr { 0.005 } else { 0.0 };
-                    let idx = off_w_out + o * kc_n + k;
-                    let v = &mut ant.learned_mb_w[idx];
-                    *v = (*v - rate).max(crate::genome::ANN_W_MIN);
-                }
+        // --- STDP on W_out (KC→output), compartmentalized dual-dopamine (T16/T18) ---
+        // T18 per-output valence: approach outputs (turn/trail/home, o<MB_APPROACH_OUT)
+        // use reward→LTP, punish→LTD (PAM compartment); avoidance outputs (alarm/attack)
+        // are OPPONENT — punish→LTP, reward→LTD (PPL1 compartment). This lets the MB
+        // learn approach AND avoidance in parallel: foraging reward strengthens food-
+        // seeking while war punish strengthens defense. Baseline forgetting LTD on all.
+        let thr = crate::genome::DOPAMINE_THRESH;
+        let valence = |o: usize| -> (f32, f32) {
+            if o < crate::genome::MB_APPROACH_OUT {
+                (ant.dopamine_reward, ant.dopamine_punish)
+            } else {
+                (ant.dopamine_punish, ant.dopamine_reward) // opponent
             }
-        }
-    }
-    // LTP: ltp_dop-gated (reward for approach, punish for avoidance)
-    for o in 0..out_n {
-        if ant.mb_out_v[o] >= 1.0 {
-            ant.last_mb_out_spike[o] = ant.age;
-            let (ltp_dop, _) = valence(o);
-            if ltp_dop > thr {
-                for k in 0..kc_act {
-                    let ts_k = ant.last_kc_spike[k];
-                    if ts_k > 0 && ant.age > ts_k && ant.age - ts_k < 10 {
+        };
+        // LTD: baseline forgetting + ltd_dop-amplified
+        for k in 0..kc_act {
+            if kc_spikes[k] {
+                for o in 0..out_n {
+                    let ts_o = ant.last_mb_out_spike[o]; // T15: MB-private
+                    if ts_o > 0 && ant.age > ts_o && ant.age - ts_o < 10 {
+                        let (_, ltd_dop) = valence(o);
+                        let rate = 0.005 + if ltd_dop > thr { 0.005 } else { 0.0 };
                         let idx = off_w_out + o * kc_n + k;
                         let v = &mut ant.learned_mb_w[idx];
-                        *v = (*v + 0.01).min(crate::genome::ANN_W_MAX);
+                        *v = (*v - rate).max(crate::genome::ANN_W_MIN);
                     }
                 }
             }
         }
-    }
+        // LTP: ltp_dop-gated (reward for approach, punish for avoidance)
+        for o in 0..out_n {
+            if ant.mb_out_v[o] >= 1.0 {
+                ant.last_mb_out_spike[o] = ant.age;
+                let (ltp_dop, _) = valence(o);
+                if ltp_dop > thr {
+                    for k in 0..kc_act {
+                        let ts_k = ant.last_kc_spike[k];
+                        if ts_k > 0 && ant.age > ts_k && ant.age - ts_k < 10 {
+                            let idx = off_w_out + o * kc_n + k;
+                            let v = &mut ant.learned_mb_w[idx];
+                            *v = (*v + 0.01).min(crate::genome::ANN_W_MAX);
+                        }
+                    }
+                }
+            }
+        }
 
-    // --- T17: AL→KC (W_kc) Hebbian plasticity, dopamine-gated, on learnable
-    // substrate KCs only (detectors 0..MB_DETECTOR_KCS are protected so the
-    // foraging-prior thresholds stay stable). KC k spiked + glom g active →
-    // strengthen (reward, PAM) / weaken (punish, PPL1) that AL→KC input.
-    // Small rate + W bounds → broadens the learnable surface without runaway.
-    const WKC_LR: f32 = 0.002;
-    let rew_w = ant.dopamine_reward > crate::genome::DOPAMINE_THRESH;
-    let pun_w = ant.dopamine_punish > crate::genome::DOPAMINE_THRESH;
-    let det = crate::genome::MB_DETECTOR_KCS;
-    if (rew_w || pun_w) && kc_act > det {
-        for k in det..kc_act {
-            if kc_spikes[k] {
-                for gl in 0..al_g {
-                    if al_out[gl].abs() > 0.1 {
-                        let idx = off_w_kc + k * al_g + gl;
-                        let v = &mut ant.learned_mb_w[idx];
-                        if rew_w {
-                            *v = (*v + WKC_LR).min(crate::genome::ANN_W_MAX);
-                        }
-                        if pun_w {
-                            *v = (*v - WKC_LR).max(crate::genome::ANN_W_MIN);
+        // --- T17: AL→KC (W_kc) Hebbian plasticity, dopamine-gated, on learnable
+        // substrate KCs only (detectors 0..MB_DETECTOR_KCS are protected so the
+        // foraging-prior thresholds stay stable). KC k spiked + glom g active →
+        // strengthen (reward, PAM) / weaken (punish, PPL1) that AL→KC input.
+        // Small rate + W bounds → broadens the learnable surface without runaway.
+        const WKC_LR: f32 = 0.002;
+        let rew_w = ant.dopamine_reward > crate::genome::DOPAMINE_THRESH;
+        let pun_w = ant.dopamine_punish > crate::genome::DOPAMINE_THRESH;
+        let det = crate::genome::MB_DETECTOR_KCS;
+        if (rew_w || pun_w) && kc_act > det {
+            for k in det..kc_act {
+                if kc_spikes[k] {
+                    for gl in 0..al_g {
+                        if al_out[gl].abs() > 0.1 {
+                            let idx = off_w_kc + k * al_g + gl;
+                            let v = &mut ant.learned_mb_w[idx];
+                            if rew_w {
+                                *v = (*v + WKC_LR).min(crate::genome::ANN_W_MAX);
+                            }
+                            if pun_w {
+                                *v = (*v - WKC_LR).max(crate::genome::ANN_W_MIN);
+                            }
                         }
                     }
                 }
             }
         }
-    }
     } // T22 ablate_stdp guard
 
     // --- apply outputs ---
@@ -844,7 +913,7 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // (evolution tunes W_al + the gain below). out0/mb_out_v[0] are still
     // computed above as the STDP substrate.
     let steer_g = al_raw[0] + al_raw[1]; // signed, carrying-gated (only one nonzero)
-    let noise_g = al_raw[7];             // signed → symmetric exploration
+    let noise_g = al_raw[7]; // signed → symmetric exploration
     let turn = (2.5 * steer_g + 0.5 * noise_g).tanh() * g.turn_rate;
     ant.heading += turn;
     let dep_trail = out[1].max(0.0) * g.trail_release_rate;
@@ -852,33 +921,52 @@ pub fn mb_decide(ant: &mut Ant, s: &Sensing, world: &World) {
     // (FSM lays Home at home_release_rate*0.05; here out[2]≤1 so *0.1 ≈ same order)
     let dep_home = out[2].max(0.0) * g.home_release_rate * 0.1;
     let dep_alarm = out[3].max(0.0) * g.alarm_release_rate;
-    if dep_trail > 0.0 { ant.pending_deposits.push((Channel::Trail, ix, iy, dep_trail)); }
-    if dep_home > 0.0 { ant.pending_deposits.push((Channel::Home, ix, iy, dep_home)); }
-    if dep_alarm > 0.0 { ant.pending_deposits.push((Channel::Alarm, ix, iy, dep_alarm)); }
+    if dep_trail > 0.0 {
+        ant.pending_deposits
+            .push((Channel::Trail, ix, iy, dep_trail));
+    }
+    if dep_home > 0.0 {
+        ant.pending_deposits.push((Channel::Home, ix, iy, dep_home));
+    }
+    if dep_alarm > 0.0 {
+        ant.pending_deposits
+            .push((Channel::Alarm, ix, iy, dep_alarm));
+    }
     if out[4] > 0.0 {
         if let Some(idx) = s.enemy_idx {
-            if s.enemy_dist <= g.antenna_dist + 1.0 { ant.pending_attacks.push((idx, 1.0)); }
+            if s.enemy_dist <= g.antenna_dist + 1.0 {
+                ant.pending_attacks.push((idx, 1.0));
+            }
         }
     }
     // reflexive pickup/delivery
     if let Some(idx) = s.food_idx {
         if !ant.carrying {
-            ant.carrying = true; ant.carrying_from = Some(idx); ant.trip_dist = 0.0;
+            ant.carrying = true;
+            ant.carrying_from = Some(idx);
+            ant.trip_dist = 0.0;
             ant.pending_pickup = Some(idx);
-            ant.pending_deposits.push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
+            ant.pending_deposits
+                .push((Channel::Recruitment, ix, iy, g.trail_release_rate * 0.5));
         }
     }
     if s.at_nest && ant.carrying {
-        ant.carrying = false; ant.delivered_source = ant.carrying_from;
-        ant.carrying_from = None; ant.trip_dist = 0.0;
+        ant.carrying = false;
+        ant.delivered_source = ant.carrying_from;
+        ant.carrying_from = None;
+        ant.trip_dist = 0.0;
         ant.delivered = ant.delivered.saturating_add(1);
         ant.heading = (ant.pos.y - world.nest.y).atan2(ant.pos.x - world.nest.x);
     }
     // (T11: octopamine/dopamine now updated experience-driven in Ant::update,
     // shared across all brain paths — not per-brain here.)
-    if ant.carrying { ant.state = State::CarryReturn; }
-    else if s.trail_val > g.trail_threshold { ant.state = State::FollowTrail; }
-    else { ant.state = State::Explore; }
+    if ant.carrying {
+        ant.state = State::CarryReturn;
+    } else if s.trail_val > g.trail_threshold {
+        ant.state = State::FollowTrail;
+    } else {
+        ant.state = State::Explore;
+    }
 }
 
 #[cfg(test)]
@@ -918,7 +1006,11 @@ mod cx_tests {
         // broad, so we require it to be strongly peaked above uniform (1/N),
         // and rely on the heading-decode check below as the strong guarantee.
         let uniform = 1.0 / crate::genome::CX_N as f32;
-        assert!(max / total > 2.0 * uniform, "bump not peaked: max/total={}", max / total);
+        assert!(
+            max / total > 2.0 * uniform,
+            "bump not peaked: max/total={}",
+            max / total
+        );
         // decoded heading near true heading (within one cell of the ring)
         let cell = std::f32::consts::TAU / crate::genome::CX_N as f32;
         let err = wrap_angle(cx_heading(&ant) - h).abs();
@@ -966,7 +1058,12 @@ mod cx_tests {
         let mut ty = 0.0f32;
         let stride = 0.5f32;
         // 4 legs of a square, 20 strides each, heading 0, 90, 180, 270 deg
-        let legs = [0.0f32, std::f32::consts::FRAC_PI_2, std::f32::consts::PI, 1.5 * std::f32::consts::PI];
+        let legs = [
+            0.0f32,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            1.5 * std::f32::consts::PI,
+        ];
         for &lh in &legs {
             ant.heading = lh;
             for _ in 0..20 {
@@ -1074,7 +1171,9 @@ mod mb_tests {
         // home vector points nest→ant; ant is +y of nest → nest bearing = -π/2.
         ant.home_hx = 0.0;
         ant.home_hy = 10.0;
-        let s = Sensing { ..Default::default() };
+        let s = Sensing {
+            ..Default::default()
+        };
         let h0 = ant.heading;
         mb_decide(&mut ant, &s, &world);
         assert!(
@@ -1094,7 +1193,9 @@ mod mb_tests {
         let mk = |punish: bool| -> f32 {
             let (mut ant, world) = mb_ant(0.0);
             ant.carrying = true;
-            let s = Sensing { ..Default::default() };
+            let s = Sensing {
+                ..Default::default()
+            };
             mb_decide(&mut ant, &s, &world); // call 1: record out1 spike
             ant.age = 1001; // advance so age > last_mb_out_spike
             if punish {
@@ -1171,7 +1272,10 @@ mod snn_tests {
             ..Default::default()
         };
         snn_decide(&mut ant, &s, &world);
-        assert!(matches!(ant.state, crate::ant::State::Nurse), "young SNN ant at nest should nurse");
+        assert!(
+            matches!(ant.state, crate::ant::State::Nurse),
+            "young SNN ant at nest should nurse"
+        );
         assert!(ant.pending_brood > 0.0, "nurse should tend brood");
     }
 

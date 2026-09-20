@@ -38,8 +38,17 @@ impl Fitness {
         behavior: Vec<f32>,
         colony: usize,
     ) -> Self {
-        let score = collected + 0.3 * mean_def_frac * colony as f32 + 0.2 * survival * colony as f32;
-        Self { collected, per_source, mean_def_frac, trail_total, survival, behavior, score }
+        let score =
+            collected + 0.3 * mean_def_frac * colony as f32 + 0.2 * survival * colony as f32;
+        Self {
+            collected,
+            per_source,
+            mean_def_frac,
+            trail_total,
+            survival,
+            behavior,
+            score,
+        }
     }
 }
 
@@ -174,7 +183,10 @@ pub fn evaluate_multi(
     seasonal: bool,
 ) -> Fitness {
     if n_seeds <= 1 {
-        return evaluate(cfg, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+        return evaluate(
+            cfg, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx,
+            seasonal,
+        );
     }
     let mut acc_col = 0.0f32;
     let mut acc_def = 0.0f32;
@@ -186,7 +198,10 @@ pub fn evaluate_multi(
     for k in 0..n_seeds {
         let mut cfgk = cfg.clone();
         cfgk.sim.seed = cfg.sim.seed.wrapping_add(k as u64 * 0x1000_0003);
-        let f = evaluate(&cfgk, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+        let f = evaluate(
+            &cfgk, env, genome, ticks, colony, brain_ann, brain_cppn, brain_snn, brain_mb,
+            brain_cx, seasonal,
+        );
         acc_col += f.collected;
         acc_def += f.mean_def_frac;
         acc_trail += f.trail_total;
@@ -211,7 +226,15 @@ pub fn evaluate_multi(
     // Fitness::new recomputes score = collected + 0.3*def*colony from the
     // averaged fields, which equals the mean score (linear), so it stays
     // consistent with the per-seed averaging.
-    let mut avg = Fitness::new(acc_col / n, last_src, acc_def / n, acc_trail / n as f64, acc_survival / n, acc_behavior, colony);
+    let mut avg = Fitness::new(
+        acc_col / n,
+        last_src,
+        acc_def / n,
+        acc_trail / n as f64,
+        acc_survival / n,
+        acc_behavior,
+        colony,
+    );
     // keep the true averaged score (in case the formula ever goes non-linear)
     avg.score = acc_score / n;
     avg
@@ -311,7 +334,10 @@ pub fn run(
         let scored: Vec<(Genome, Fitness)> = population
             .iter()
             .map(|g| {
-                let f = evaluate_multi(cfg, env, g, ticks, colony, n_seeds, brain_ann, brain_cppn, brain_snn, brain_mb, brain_cx, seasonal);
+                let f = evaluate_multi(
+                    cfg, env, g, ticks, colony, n_seeds, brain_ann, brain_cppn, brain_snn,
+                    brain_mb, brain_cx, seasonal,
+                );
                 (g.clone(), f)
             })
             .collect();
@@ -319,7 +345,12 @@ pub fn run(
         let best = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let worst = scores.iter().cloned().fold(f32::INFINITY, f32::min);
         let mean = scores.iter().sum::<f32>() / scores.len() as f32;
-        history.push(GenRecord { gen, best, mean, worst });
+        history.push(GenRecord {
+            gen,
+            best,
+            mean,
+            worst,
+        });
 
         // open-ended litmus (T5.3 genotypic + T18 behavioral): mean pairwise
         // distance over genomes AND over behavioral fingerprints.
@@ -418,13 +449,23 @@ pub fn run(
         while next.len() < pop {
             let pa = tournament(&select_scores, &mut rng, 3);
             let pb = tournament(&select_scores, &mut rng, 3);
-            let child = scored[pa].0.crossover(&scored[pb].0, &mut rng).mutate(&mut rng);
+            let child = scored[pa]
+                .0
+                .crossover(&scored[pb].0, &mut rng)
+                .mutate(&mut rng);
             next.push(child);
         }
         population = next;
     }
 
-    EvolveResult { best_genome, best_fitness, history, diversity, diversity_behavior, novelty: novelty_series }
+    EvolveResult {
+        best_genome,
+        best_fitness,
+        history,
+        diversity,
+        diversity_behavior,
+        novelty: novelty_series,
+    }
 }
 
 /// Multi-level selection (C5): one diverse colony is built from a genome
@@ -447,7 +488,7 @@ pub fn run_multilevel(
     brain_snn: bool,
     brain_mb: bool,
     brain_cx: bool,
-    seasonal: bool,
+    _seasonal: bool,
 ) -> EvolveResult {
     use rand::{Rng, SeedableRng};
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed ^ 0xC5C5);
@@ -456,7 +497,7 @@ pub fn run_multilevel(
     let mut history: Vec<GenRecord> = Vec::new();
     let mut diversity: Vec<f64> = Vec::new();
     let mut diversity_behavior: Vec<f64> = Vec::new();
-    let mut novelty_series: Vec<f64> = Vec::new();
+    let novelty_series: Vec<f64> = Vec::new();
     let mut best_genome = base.clone();
     let mut best_fitness = Fitness {
         collected: 0.0,
@@ -475,7 +516,7 @@ pub fn run_multilevel(
         sim.world.nest_radius = cfg.world.nest_radius;
         sim.brain_ann = brain_ann || brain_cppn || brain_snn || brain_mb;
         sim.brain_snn = brain_snn;
-    sim.brain_mb = brain_mb;
+        sim.brain_mb = brain_mb;
         sim.brain_cx = brain_cx;
         if brain_cppn {
             for a in sim.ants.iter_mut() {
@@ -500,7 +541,11 @@ pub fn run_multilevel(
                 samples += 1;
             }
         }
-        let mean_def_frac = if samples > 0 { def_sum / samples as f32 } else { 0.0 };
+        let mean_def_frac = if samples > 0 {
+            def_sum / samples as f32
+        } else {
+            0.0
+        };
         let trail_total: f64 = sim
             .world
             .field
@@ -549,7 +594,10 @@ pub fn run_multilevel(
             diversity_behavior.push(0.0);
         }
         if colony_fit.score > best_fitness.score {
-            best_genome = scored.first().map(|(g, _)| g.clone()).unwrap_or(base.clone());
+            best_genome = scored
+                .first()
+                .map(|(g, _)| g.clone())
+                .unwrap_or(base.clone());
             best_fitness = colony_fit.clone();
         }
 
@@ -569,9 +617,15 @@ pub fn run_multilevel(
         pool = next;
     }
 
-    EvolveResult { best_genome, best_fitness, history, diversity, diversity_behavior, novelty: novelty_series }
+    EvolveResult {
+        best_genome,
+        best_fitness,
+        history,
+        diversity,
+        diversity_behavior,
+        novelty: novelty_series,
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -587,8 +641,17 @@ mod tests {
         let same = vec![0.5, 0.5, 0.0, 0.0, 0.3, 0.0, 0.5, 0.5, 0.0];
         let d_diff = behavior_distance(&a, &b);
         let d_same = behavior_distance(&a, &same);
-        assert!(d_diff > d_same, "different behaviors should be farther: {} vs {}", d_diff, d_same);
-        assert!(d_same < 1e-9, "identical behaviors should be ~0: {}", d_same);
+        assert!(
+            d_diff > d_same,
+            "different behaviors should be farther: {} vs {}",
+            d_diff,
+            d_same
+        );
+        assert!(
+            d_same < 1e-9,
+            "identical behaviors should be ~0: {}",
+            d_same
+        );
     }
 }
 
@@ -627,10 +690,20 @@ mod novelty_tests {
             vec![0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.2, 0.2, 0.3, 0.3, 0.3],
         ];
         // clonal: 4 identical
-        let clonal = vec![diverse[0].clone(), diverse[0].clone(), diverse[0].clone(), diverse[0].clone()];
+        let clonal = vec![
+            diverse[0].clone(),
+            diverse[0].clone(),
+            diverse[0].clone(),
+            diverse[0].clone(),
+        ];
         let nd = mean_novelty(&diverse);
         let nc = mean_novelty(&clonal);
-        assert!(nd > nc, "diverse population should have higher novelty: {} vs {}", nd, nc);
+        assert!(
+            nd > nc,
+            "diverse population should have higher novelty: {} vs {}",
+            nd,
+            nc
+        );
         assert!(nc < 1e-9, "clonal population novelty should be ~0: {}", nc);
     }
 }

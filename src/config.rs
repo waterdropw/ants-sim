@@ -43,21 +43,11 @@ impl Default for SimCfg {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     pub genome: Genome,
     pub world: WorldCfg,
     pub sim: SimCfg,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            genome: Genome::default(),
-            world: WorldCfg::default(),
-            sim: SimCfg::default(),
-        }
-    }
 }
 
 impl Config {
