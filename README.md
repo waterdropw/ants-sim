@@ -21,7 +21,7 @@
 - [演化与选择](#演化与选择)
 - [验证体系](#验证体系)
 - [关键结果](#关键结果)
-- [Phase 9 全量稳健演化](#phase-9-全量稳健演化)
+- [稳健演化与保留集复评](#稳健演化与保留集复评)
 - [命令行参考](#命令行参考)
 - [性能](#性能)
 - [可复现性](#可复现性)
@@ -47,7 +47,7 @@
 ```bash
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 cargo run --release            # 打开 GUI
-cargo test                     # 30 个性质测试
+cargo test                     # 48 个回归与性质测试
 cargo run --release -- --headless --report   # 重生成 REPORT.md
 ```
 
@@ -79,19 +79,17 @@ cargo run --release -- --headless --report   # 重生成 REPORT.md
 
 ## 昆虫脑神经模块
 
-真实蚂蚁神经系统的关键结构，做成**可演化、可独立验证**的模块：
+本项目以工程尺度模块抽象感知—整合—行动—反馈闭环，支持可演化参数与独立消融验证；并非真实蚂蚁连接组或细胞类型的复刻。MB 的关联学习逻辑以果蝇蘑菇体结构和多巴胺价值信号研究为功能参照 [Aso et al., 2014](https://doi.org/10.7554/eLife.04577)、[Liu et al., 2012](https://doi.org/10.1038/nature11304)、[Aso et al., 2010](https://doi.org/10.1016/j.cub.2010.06.048)；CX-like 路径积分以环吸引子和方向整合研究为参照 [Seelig & Jayaraman, 2015](https://doi.org/10.1038/nature14446)。完整参考文献和外推边界见 `docs/research_scope.md`。
 
-| Tier | 模块 | 生物对应 | 关键机制 |
-|---|---|---|---|
-| 8 | 蘑菇体 MB | AL + MB + STDP | 12 瞌小球收敛 → 64 稀疏 KC → 5 输出；多巴胺门控 STDP |
-| 9 | 中央复合体 CX | 环吸引子 + CPU4 | CX_N=16 朝向单元神经化路径积分 |
-| 10 | 多模态整合 | 视觉 + 距离 → MB | 视觉/距离 4 通道汇入 AL 瞌小球 |
-| 11 | 神经调质 | 多巴胺 / 章鱼胺 | octopamine 经验驱动 → 探索强度/轨迹阈值/攻击性 |
-| 13 | 发育可塑性 | MB 神经发生 | KC 随觅食经验从 24 长到 64（一生内） |
-| 14 | CPG 步态 | 三角步态 | 6 腿 tripod 相位 + octopamine → 步频 → 速度 |
-| 16 | 多巴胺 RPE 化 | PAM / PPL1 双 DAN | reward→LTP、punish→LTD，伤害驱动 aversive 学习 |
-| 17 | 饱食调制 | 能量门控 | 奖励 gain 随能量缺口上升（饥饿学得更多） |
-| 18 | 分室化 DAN | approach/avoidance | 正/负关联在分室输出上并行学习 |
+| 模块 | 功能参照 | 当前实现与可报告读出 |
+|---|---|---|
+| 蘑菇体（MB） | AL—KC—输出通路与关联学习 | 12 个 AL 单元汇入最多 64 个稀疏 KC，再投射到 5 个输出；支持双通道多巴胺门控 STDP、资格痕迹和神经发生。`--phase7` 输出逐试次突触与输出证据。 |
+| 中央复合体样模块（CX-like） | 环吸引子方向表征与路径积分 | 16 单元环吸引子整合带噪罗盘观测和运动反馈，输出归巢向量；`--bench-cx` 仅量化抽象积分器的数值误差。 |
+| 多模态感知整合 | 近距离视觉、化学与本体状态的汇合 | ORN 适应与噪声、AL 侧抑制、PN 单/混合通道及 LH-like 快速转向证据汇入 MB/integrated 控制器。 |
+| 神经调质 | 多巴胺价值信号与章鱼胺—多巴胺层级调制 | reward/punish 标量分别门控接近/回避通路可塑性；OA-like 状态调制探索、线索响应、攻击和步频。对应关系仅为功能类比。 |
+| 发育可塑性 | 经验相关的有效回路容量变化 | KC 有效数随觅食经验由 24 增长并上限为 64；这是模型内发育变量，不对应真实神经发生率。 |
+| CPG 步态 | 交替三足步态 | 六腿两相位 tripod 振荡器，OA-like 唤醒调制频率与速度；不拟合真实关节动力学。 |
+| 能量与分室化价值调制 | 饱食状态、接近/回避价值通路 | 奖励增益随能量缺口调整；接近与回避输出使用相反的 reward/punish 可塑性门控。 |
 
 ## 演化与选择
 
@@ -122,21 +120,21 @@ cargo run --release -- --headless --report   # 重生成 REPORT.md
 - **性能**：100k 蚂蚁 @ 136 tick/s（rayon 并行 + 双缓冲场 + 空间哈希）。
 - **确定性**：per-ant RNG + 串行 flush，并行下逐字节可复现。
 
-## Phase 9 全量稳健演化
+## 稳健演化与保留集复评
 
-2026-09-20 已完成 integrated brain 的五环境稳健演化：每环境训练 `12 generations × 12 population × 3000 ticks × 3 seeds`，随后以 `6000 ticks × 5` 个与训练集隔离的 seed，对冠军与默认基线复评。原始逐 seed 数据位于 `results/phase9_robust_evolution.csv`，每环境冠军配置为 `results/phase9_integrated_<env>.toml`。
+为检验演化结果是否仅来自特定随机轨迹，本实验对 integrated brain 在五类合成环境中分别执行多随机种子训练，并以与训练 seed 隔离的保留集进行冠军—默认基线复评。每个环境的训练预算为 `12 generations × 12 population × 3000 ticks × 3 training seeds`；部署复评为 `6000 ticks × 5 held-out seeds`。适应度定义为 `score = collected + 0.3·mean_def_frac·colony + 0.2·survival·colony`，因此应同时报告资源收集、防御状态和存活，而非仅比较单一分数。逐 seed 原始读数见 `results/phase9_robust_evolution.csv`；对应冠军配置见 `results/phase9_integrated_<env>.toml`。
 
-| 环境 | 训练最佳分数 | 默认部署均分 | 冠军部署均分 | 冠军最低存活率 | 推荐门结论 |
+| 环境 | 训练期最佳分数 | 默认基线：保留集均分 | 冠军：保留集均分 | 冠军：保留集最低存活率 | 当前判定 |
 |---|---:|---:|---:|---:|---|
-| `rich_close` | 4463.667 | 9418.880 | 9418.880 | 1.000 | `NOT_SUPPORTED` |
-| `scarce_far` | 364.800 | 122.200 | 659.760 | 0.670 | `CONDITIONAL_USE` |
-| `predator` | 663.800 | 667.840 | 667.840 | 0.015 | `NOT_SUPPORTED` |
-| `patchy` | 2250.467 | 306.000 | 3550.800 | 0.385 | `NOT_SUPPORTED` |
-| `maze` | 526.867 | 34.200 | 969.560 | 0.975 | `CONDITIONAL_USE` |
+| `rich_close` | 4463.667 | 9418.880 | 9418.880 | 1.000 | 无增益证据 |
+| `scarce_far` | 364.800 | 122.200 | 659.760 | 0.670 | 条件性采用 |
+| `predator` | 663.800 | 667.840 | 667.840 | 0.015 | 无增益且存活不足 |
+| `patchy` | 2250.467 | 306.000 | 3550.800 | 0.385 | 收集增益存在，但稳健性不足 |
+| `maze` | 526.867 | 34.200 | 969.560 | 0.975 | 条件性采用 |
 
-推荐门要求：Phase 7/8/9 证据齐全、冠军保留 seed 的平均分高于默认基线，且冠军在全部保留 seed 的最低存活率不低于 0.5。因此 `scarce_far`（约 5.40× 得分）和 `maze`（约 28.35× 得分）获得条件性部署推荐；`patchy` 虽有约 11.60× 的得分提升，但最低存活率仅 0.385，未达门槛。`rich_close` 与 `predator` 未显示冠军超过默认基线。
+**判定规则。** 只有 MB 学习协议、招募矩阵和保留集复评均生成有效数据，且冠军的保留集平均分严格高于默认基线、所有保留 seed 的最低存活率不低于 0.5 时，才标记为“条件性采用”。据此，`scarce_far` 的冠军均分为默认基线的约 5.40 倍，`maze` 为约 28.35 倍；两者通过当前门槛。`patchy` 的均分提升约 11.60 倍，但最低存活率为 0.385，故不应作为稳健部署配置。`rich_close` 与 `predator` 未观察到相对默认基线的部署增益。
 
-这些结论仅是当前抽象实现、固定环境与评估协议下的模型内条件性部署偏好；不构成真实物种机制、跨物种泛化或湿实验干预结论。
+**解释范围。** 这是一项固定实现、合成环境、有限训练预算和指定随机协议下的模型内泛化检查，不是局部适应或生态适合度的物种级检验。关于 G×E 外推的概念边界可参见 [Kawecki & Ebert, 2004](https://doi.org/10.1111/j.1461-0248.2004.00684.x)；本项目的完整证据范围、外部假设及文献清单见 `docs/research_scope.md`。
 
 ## 命令行参考
 
@@ -154,10 +152,10 @@ cargo run --release -- --headless --evolve --brain cppn --env rich_close --gens 
 cargo run --release -- --headless --evolve --brain fsm --env maze --ticks 3000 --out-stem evolved_fsm_maze_long  # 长视野演化
 cargo run --release -- --headless --zoo --ticks 1000                    # 冠军 vs 默认
 cargo run --release -- --headless --transfer --ticks 800                # 跨环境迁移矩阵
-cargo run --release -- --headless --phase7 --n-seeds 8                   # MB 学习因果协议（获取/消退/反转/阻断/延迟/效价）
+cargo run --release -- --headless --phase7 --n-seeds 8                   # MB 学习协议：获取/消退/反转/阻断/延迟/效价
 cargo run --release -- --headless --phase8 --env scarce_far --n-seeds 5 # 信息素 × 接触招募 2×2 矩阵
-cargo run --release -- --headless --phase9                               # 全环境多 seed 训练 + 隔离部署复评
-cargo run --release -- --headless --phase10                              # 汇总证据并输出条件性推荐门
+cargo run --release -- --headless --phase9                               # 全环境多 seed 训练与保留集复评
+cargo run --release -- --headless --phase10                              # 汇总协议证据并输出当前判定
 
 # 验证 / 文献
 cargo run --release -- --headless --validate --ticks 3000               # 行为涌现电池
