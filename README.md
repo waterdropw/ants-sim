@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Language](https://img.shields.io/badge/language-Rust-orange.svg)
 ![egui](https://img.shields.io/badge/egui-0.36-8b5cf6.svg)
-![Tests](https://img.shields.io/badge/tests-30%20pass-green.svg)
+![Tests](https://img.shields.io/badge/tests-48%20pass-green.svg)
 
 把蚂蚁的「身体即计算 + 信息素涌现 + 群体分布式智能 + 基因-环境适配」做成**可运行、可观测、可复现**的仿真：6 种可演化决策脑（FSM/ANN/CPPN/SNN/蘑菇体/中央复合体）、信息素场双缓冲扩散、最短路径 ACO 涌现、跨环境演化与特化、以及与经典昆虫行为学文献的定量对照。
 
@@ -21,6 +21,7 @@
 - [演化与选择](#演化与选择)
 - [验证体系](#验证体系)
 - [关键结果](#关键结果)
+- [Phase 9 全量稳健演化](#phase-9-全量稳健演化)
 - [命令行参考](#命令行参考)
 - [性能](#性能)
 - [可复现性](#可复现性)
@@ -121,6 +122,22 @@ cargo run --release -- --headless --report   # 重生成 REPORT.md
 - **性能**：100k 蚂蚁 @ 136 tick/s（rayon 并行 + 双缓冲场 + 空间哈希）。
 - **确定性**：per-ant RNG + 串行 flush，并行下逐字节可复现。
 
+## Phase 9 全量稳健演化
+
+2026-09-20 已完成 integrated brain 的五环境稳健演化：每环境训练 `12 generations × 12 population × 3000 ticks × 3 seeds`，随后以 `6000 ticks × 5` 个与训练集隔离的 seed，对冠军与默认基线复评。原始逐 seed 数据位于 `results/phase9_robust_evolution.csv`，每环境冠军配置为 `results/phase9_integrated_<env>.toml`。
+
+| 环境 | 训练最佳分数 | 默认部署均分 | 冠军部署均分 | 冠军最低存活率 | 推荐门结论 |
+|---|---:|---:|---:|---:|---|
+| `rich_close` | 4463.667 | 9418.880 | 9418.880 | 1.000 | `NOT_SUPPORTED` |
+| `scarce_far` | 364.800 | 122.200 | 659.760 | 0.670 | `CONDITIONAL_USE` |
+| `predator` | 663.800 | 667.840 | 667.840 | 0.015 | `NOT_SUPPORTED` |
+| `patchy` | 2250.467 | 306.000 | 3550.800 | 0.385 | `NOT_SUPPORTED` |
+| `maze` | 526.867 | 34.200 | 969.560 | 0.975 | `CONDITIONAL_USE` |
+
+推荐门要求：Phase 7/8/9 证据齐全、冠军保留 seed 的平均分高于默认基线，且冠军在全部保留 seed 的最低存活率不低于 0.5。因此 `scarce_far`（约 5.40× 得分）和 `maze`（约 28.35× 得分）获得条件性部署推荐；`patchy` 虽有约 11.60× 的得分提升，但最低存活率仅 0.385，未达门槛。`rich_close` 与 `predator` 未显示冠军超过默认基线。
+
+这些结论仅是当前抽象实现、固定环境与评估协议下的模型内条件性部署偏好；不构成真实物种机制、跨物种泛化或湿实验干预结论。
+
 ## 命令行参考
 
 ```bash
@@ -137,6 +154,10 @@ cargo run --release -- --headless --evolve --brain cppn --env rich_close --gens 
 cargo run --release -- --headless --evolve --brain fsm --env maze --ticks 3000 --out-stem evolved_fsm_maze_long  # 长视野演化
 cargo run --release -- --headless --zoo --ticks 1000                    # 冠军 vs 默认
 cargo run --release -- --headless --transfer --ticks 800                # 跨环境迁移矩阵
+cargo run --release -- --headless --phase7 --n-seeds 8                   # MB 学习因果协议（获取/消退/反转/阻断/延迟/效价）
+cargo run --release -- --headless --phase8 --env scarce_far --n-seeds 5 # 信息素 × 接触招募 2×2 矩阵
+cargo run --release -- --headless --phase9                               # 全环境多 seed 训练 + 隔离部署复评
+cargo run --release -- --headless --phase10                              # 汇总证据并输出条件性推荐门
 
 # 验证 / 文献
 cargo run --release -- --headless --validate --ticks 3000               # 行为涌现电池
